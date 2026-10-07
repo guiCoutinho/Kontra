@@ -1,6 +1,14 @@
 spring:
   application:
     name: kontra-backend
+  autoconfigure:
+    # Sem mecanismo de autenticação no Marco 0 (ADR-007): desliga o usuário em memória que o Boot
+    # geraria (e o log "Using generated security password"). Por propriedade, para valer também nos
+    # testes de fatia (@WebMvcTest).
+    # ATENÇÃO: é uma LISTA. Qualquer outra fonte desta propriedade (variável SPRING_AUTOCONFIGURE_EXCLUDE,
+    # perfil, @SpringBootTest(properties = ...), linha de comando) SUBSTITUI esta lista em vez de somar —
+    # repita esta classe nela, senão o usuário em memória volta a ser criado.
+    exclude: org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration
   datasource:
     # Padrões apontam para o PostgreSQL do docker compose — credenciais SÓ de desenvolvimento (ADR-012).
     # Qualquer ambiente real deve sobrescrever BANCO_URL, BANCO_USUARIO e BANCO_SENHA.
@@ -15,3 +23,13 @@ spring:
     hibernate:
       # O esquema é 100% controlado pelo Flyway (db/migration).
       ddl-auto: validate
+  web:
+    # Aplicação só em português (ADR-013): mensagens do Bean Validation sempre em pt-BR,
+    # independentemente do Accept-Language do cliente e do locale da JVM.
+    locale: pt_BR
+    locale-resolver: fixed
+    error:
+      # Erros fora do MVC respondem em Problem Details pelo ErroPadraoController (comum/erro); a página
+      # "Whitelabel" do Boot fica desligada. (No Boot 4, server.error.* foi substituído por spring.web.error.*.)
+      whitelabel:
+        enabled: false
