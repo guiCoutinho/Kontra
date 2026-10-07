@@ -1,5 +1,6 @@
-# Ambiente do Kontra. Por enquanto só o banco; backend e frontend entram na T11.
+# Ambiente do Kontra: banco + backend + frontend (nginx com proxy de /api).
 # Lê o .env da raiz (fora do git); sem ele, usa os padrões de desenvolvimento.
+# Todas as portas são publicadas só em 127.0.0.1 (acessíveis em localhost, não pela rede).
 name: kontra
 
 services:
@@ -21,6 +22,43 @@ services:
       timeout: 5s
       retries: 10
       start_period: 10s
+
+  backend:
+    build: ./backend
+    depends_on:
+      banco:
+        condition: service_healthy
+    environment:
+      # Montados a partir de POSTGRES_* com o host "banco". Não interpolar BANCO_* do .env:
+      # um .env copiado do exemplo (com "localhost") quebraria o backend dentro do container.
+      BANCO_URL: jdbc:postgresql://banco:5432/${POSTGRES_DB:-kontra}
+      BANCO_USUARIO: ${POSTGRES_USER:-kontra}
+      BANCO_SENHA: ${POSTGRES_PASSWORD:-kontra}
+    ports:
+      - "127.0.0.1:${PORTA_BACKEND:-8080}:8080"
+    healthcheck:
+      # timeout > tempo do /api/saude com o banco fora (~5 s, timeout do Hikari); sem isso cada probe
+      # estoura o timeout em vez de receber o 503. start_period cobre o boot (máquinas lentas/CI).
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/api/saude"]
+      interval: 5s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${PORTA_FRONTEND:-3000}:8080"
+    healthcheck:
+      # 127.0.0.1 e não localhost: o nginx escuta só em IPv4 e o wget resolveria localhost para ::1.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/ > /dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
 
 volumes:
   kontra-dados-banco:
