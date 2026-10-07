@@ -70,7 +70,7 @@ Exemplos:
 
 #### Schemas comuns (formato de erro)
 
-`ProblemaResponse`, `ErroDeCampo` e `CodigoErro` (enum nomeado, `enumAsRef = true`), conforme `docs/ARQUITETURA.md` → "Formato padronizado de erro" (extensões `codigo`, `ocorridoEm`, `erros[]` com `campo`/`mensagem`; `title` em pt-BR por código). Precisam aparecer em `components.schemas` do snapshot já no Marco 0 (referenciados pela resposta 500 de `/api/saude`), para o frontend tipar o `ErroApi`.
+`ProblemaResponse`, `ErroDeCampo` e `CodigoErro` (enum nomeado, `enumAsRef = true`), conforme `docs/ARQUITETURA.md` → "Formato padronizado de erro" (extensões `codigo`, `ocorridoEm`, `erros[]` com `campo`/`mensagem`; `title` em pt-BR por código; `detail` sempre presente; 4xx sem código próprio → `ERRO_REQUISICAO` com o status real, 5xx → `ERRO_INTERNO`). Precisam aparecer em `components.schemas` do snapshot já no Marco 0 (referenciados pela resposta 500 de `/api/saude`), para o frontend tipar o `ErroApi`.
 
 #### Comportamento global (não entra no cliente gerado)
 
@@ -78,7 +78,12 @@ Exemplos:
 |---|---|
 | Qualquer rota fora da lista pública (inclusive inexistente), ex.: `GET /api/inexistente` | 401, `application/problem+json`, `codigo` = `NAO_AUTENTICADO`, sem `Set-Cookie` |
 | `GET /v3/api-docs`, `GET /swagger-ui.html` (e `/swagger-ui/**`) | 200 (ou redirecionamento para `/swagger-ui/index.html`), sem autenticação |
-| `POST /api/saude` (ou outro método além de `GET`) | 401 `NAO_AUTENTICADO` — a regra pública vale só para `GET` |
+| `POST /api/saude` (ou outro método além de `GET`, inclusive `HEAD`) | 401 `NAO_AUTENTICADO` — a regra pública vale só para `GET` (pendência registrada no ADR-007) |
+| Erro despachado para `/error` (fora do Spring MVC) | Problem Details pelo `ErroPadraoController`: status original (ausente → 404), `codigo` por `CodigoErro.deStatus`, `instance` = URI original |
+| `TRACE` em qualquer rota | 405 `METODO_NAO_PERMITIDO` (barrado pelo Tomcat, respondido pelo `/error`) |
+| Método desconhecido (ex.: `FOO`) | 400 `REQUISICAO_MALFORMADA` (rejeitado pelo firewall, `TratadorRequisicaoRejeitada`) |
+| URL rejeitada pelo firewall do Spring Security (ex.: `;`, `//`, `%2e%2e`, dupla codificação `%252e`) | 400 `REQUISICAO_MALFORMADA` (Problem Details, `TratadorRequisicaoRejeitada`, `detail` específico) |
+| Requisição recusada pelo Tomcat antes do servlet (barra codificada `/api/a%2Fb`, `%` solto, URI ou cabeçalho acima de 8 KB) | 400 no formato do próprio Tomcat, sem detalhe interno — **fora do contrato** (lacuna aceita) |
 
 ### Migrações
 
@@ -152,29 +157,32 @@ Legenda: cada tarefa = 1 commit na branch `feat/marco-0-fundacao` (ADR-010). Flu
   - `GET /api/inexistente` sem autenticação → 401, `Content-Type: application/problem+json`, `codigo` = `NAO_AUTENTICADO`, `status` = 401, `title` = "Não autenticado", `ocorridoEm` presente, sem `Set-Cookie`.
   - Corpo inválido (Bean Validation) → 400 `ERRO_VALIDACAO` com `erros[].campo` e `erros[].mensagem`.
   - JSON malformado → 400 `REQUISICAO_MALFORMADA`.
+  - 4xx sem código próprio → `ERRO_REQUISICAO` com o status real (teste do `CodigoErro.deStatus` para 406 e 413, e um teste de fatia com 406 — `Accept` não atendível — verificando `status` 406 e `codigo` `ERRO_REQUISICAO`); 5xx do framework → `ERRO_INTERNO` (decisão de 2026-10-06, ver ADR-006).
   - `ExcecaoApi` → status e `codigo` informados na exceção.
   - Exceção inesperada → 500 `ERRO_INTERNO`; o corpo não contém stack trace nem nome de classe de exceção.
   - Log de inicialização sem `Using generated security password` (verificável no log do `spring-boot:run`).
 - **Depende de**: T3.
 
 **T5 — springdoc + snapshot versionado do OpenAPI** · `backend`
-- **Área**: `backend/pom.xml` (`org.springdoc:springdoc-openapi-starter-webmvc-ui:3.1.1`), `config/OpenApiConfig.java`, `application.yml` (`springdoc.writer-with-order-by-keys: true`, `springdoc.writer-with-default-pretty-printer: true`), `src/test/java/br/com/kontra/config/SnapshotOpenApiIT.java`, `backend/openapi/openapi.json`.
-- **Fazer**: `OpenApiConfig` com `info` fixo (`API do Kontra`, `0.1.0`) e `servers` fixo (`/`). `SnapshotOpenApiIT` conforme ADR-004: compara como árvore JSON; com `-Dopenapi.atualizarSnapshot=true` regrava o arquivo (JSON indentado, LF, newline final) e passa; sem a propriedade e com divergência, falha com mensagem que cita o comando de atualização. Garantir que a propriedade chega ao JVM do Failsafe.
+- **Área**: `backend/pom.xml` (`org.springdoc:springdoc-openapi-starter-webmvc-ui:3.1.1`), `config/OpenApiConfig.java`, `application.yml` (`springdoc.writer-with-order-by-keys: true`, `springdoc.writer-with-default-pretty-printer: true`, `springdoc.paths-to-match: /api/**`), `src/test/java/br/com/kontra/config/SnapshotOpenApiIT.java`, `backend/openapi/openapi.json`.
+- **Fazer**: `OpenApiConfig` com `info` fixo (`API do Kontra`, `0.1.0`) e `servers` fixo (`/`). O `ErroPadraoController` (`/error`) **não** pode aparecer no OpenAPI nem no snapshot: usar `springdoc.paths-to-match: /api/**` (recomendado — toda a API fica sob `/api`, ADR-005; rota nova fora de `/api` não entra no contrato por engano) ou, alternativamente, `@Hidden` no controller. `SnapshotOpenApiIT` (anotado com `@TesteDeIntegracao`, ADR-011) conforme ADR-004: compara como árvore JSON; com `-Dopenapi.atualizarSnapshot=true` regrava o arquivo (JSON indentado, LF, newline final) e passa; sem a propriedade e com divergência, falha com mensagem que cita o comando de atualização. Garantir que a propriedade chega ao JVM do Failsafe.
 - **Pronto**:
   - `./mvnw verify -Dopenapi.atualizarSnapshot=true` → cria `backend/openapi/openapi.json` com `info.title` = `API do Kontra` e `servers[0].url` = `/`.
   - Rodar `./mvnw verify` duas vezes seguidas → o arquivo não muda (`sha256sum backend/openapi/openapi.json` igual antes/depois).
   - Alterar `info.title` à mão no arquivo → `./mvnw verify` **falha** com a mensagem de atualização; reverter → passa.
+  - O snapshot não tem o path `/error` (nem nenhum fora de `/api`): `node -e "const s=require('./backend/openapi/openapi.json');console.log(Object.keys(s.paths||{}).filter(p=>!p.startsWith('/api/')).length)"` → `0`.
   - App rodando: `curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/v3/api-docs` → `200`; `http://localhost:8080/swagger-ui.html` abre sem autenticação.
 - **Depende de**: T4.
 
 **T6 — Endpoint `GET /api/saude`** · `backend`
 - **Área**: `saude/controller/SaudeController.java`, `saude/service/SaudeService.java`, `saude/dto/SaudeResponse.java`, `saude/dto/StatusComponente.java`, testes, `backend/openapi/openapi.json` (atualizado).
 - **Fazer**: conforme o contrato acima. `SaudeController.obterSaude()` → `SaudeService.verificarBancoDeDados()`. Anotações: `@Tag(name = "saude")`, `@Operation(operationId = "obterSaude", ...)`, `@ApiResponse` para 200, 503 (`SaudeResponse`) e 500 (`ProblemaResponse`, `application/problem+json`); campos obrigatórios com `requiredMode = REQUIRED`; enums com `enumAsRef = true`.
+  - Como os schemas de erro passam a aparecer no snapshot nesta tarefa, `ProblemaResponse`, `ErroDeCampo` e `CodigoErro` (`comum/erro`) recebem `@Schema`: `requiredMode = REQUIRED` em `type`, `title`, `status`, `detail`, `codigo`, `ocorridoEm` (`ProblemaResponse`) e em `campo`, `mensagem` (`ErroDeCampo`); `instance` e `erros` opcionais; `enumAsRef = true` em `CodigoErro`; descrições em português.
 - **Pronto**:
   - `SaudeServiceTest` (Mockito): conexão válida → `DISPONIVEL`/`DISPONIVEL`; `SQLException` ou `isValid=false` → `INDISPONIVEL`/`INDISPONIVEL`.
   - `SaudeControllerTest` (`@WebMvcTest` + `SegurancaConfig`, service mockado): 200 com corpo `DISPONIVEL`; 503 com corpo `INDISPONIVEL`; sem autenticação; `Cache-Control: no-store`.
-  - `SaudeIT` (Testcontainers): `GET /api/saude` → 200 e `{"status":"DISPONIVEL","bancoDeDados":"DISPONIVEL","verificadoEm":"..."}`.
-  - Snapshot atualizado: `node -e "const s=require('./backend/openapi/openapi.json');console.log(s.paths['/api/saude'].get.operationId, Object.keys(s.components.schemas).sort().join(','))"` → `obterSaude CodigoErro,ErroDeCampo,ProblemaResponse,SaudeResponse,StatusComponente`; `SaudeResponse.required` contém `status`, `bancoDeDados`, `verificadoEm`.
+  - `SaudeIT` (`@TesteDeIntegracao`, Testcontainers): `GET /api/saude` → 200 e `{"status":"DISPONIVEL","bancoDeDados":"DISPONIVEL","verificadoEm":"..."}`.
+  - Snapshot atualizado: `node -e "const s=require('./backend/openapi/openapi.json');console.log(s.paths['/api/saude'].get.operationId, Object.keys(s.components.schemas).sort().join(','))"` → `obterSaude CodigoErro,ErroDeCampo,ProblemaResponse,SaudeResponse,StatusComponente`; `SaudeResponse.required` contém `status`, `bancoDeDados`, `verificadoEm`; `ProblemaResponse.required` contém `type`, `title`, `status`, `detail`, `codigo`, `ocorridoEm`; `CodigoErro.enum` inclui `ERRO_REQUISICAO`.
   - Manual: com `docker compose up -d banco --wait` e `./mvnw spring-boot:run`: `curl -i http://localhost:8080/api/saude` → 200; `docker compose stop banco` → em até 10 s responde 503 com `INDISPONIVEL`; `docker compose start banco` → volta a 200.
   - `./mvnw verify` → `BUILD SUCCESS`.
 - **Depende de**: T5.
@@ -222,7 +230,7 @@ Legenda: cada tarefa = 1 commit na branch `feat/marco-0-fundacao` (ADR-010). Flu
 **T11 — Dockerfiles, nginx e compose completo** · `devops`
 - **Área**: `backend/Dockerfile`, `backend/.dockerignore`, `frontend/Dockerfile`, `frontend/.dockerignore`, `frontend/nginx.conf`, `docker-compose.yml`, `.env.example`.
 - **Fazer**:
-  - Backend: build em `eclipse-temurin:21-jdk` (`chmod +x mvnw`, camada de dependências com `./mvnw -B dependency:go-offline`, depois `./mvnw -B -DskipTests package`); runtime `eclipse-temurin:21-jre-alpine`, usuário não root, `EXPOSE 8080`.
+  - Backend: build em `eclipse-temurin:21-jdk` (`chmod +x mvnw`, camada de dependências com `./mvnw -B dependency:go-offline`, depois `./mvnw -B -DskipTests package`); runtime `eclipse-temurin:21-jre-alpine`, usuário não root, `EXPOSE 8080`, `ENV JAVA_TOOL_OPTIONS="-Duser.language=pt -Duser.country=BR"` (locale da JVM em pt-BR para validação fora de requisição — ADR-013, "Locale fixo").
   - Frontend: build em `node:24-alpine` (`npm ci && npm run build`; o cliente gerado já está versionado); runtime `nginxinc/nginx-unprivileged:1.30-alpine` ouvindo 8080; `nginx.conf` com `location /api/ { proxy_pass http://backend:8080; ... }` (sem barra final, preserva `/api`), cabeçalhos `X-Forwarded-*`, fallback SPA `try_files $uri $uri/ /index.html`, `index.html` com `Cache-Control: no-cache`, `/assets/` com cache longo `immutable`.
   - Compose: `backend` (variáveis `BANCO_*` derivadas de `POSTGRES_*`, `depends_on: banco: service_healthy`, healthcheck `wget -qO- http://localhost:8080/api/saude`, porta `"127.0.0.1:${PORTA_BACKEND:-8080}:8080"`); `frontend` (`depends_on: backend: service_healthy`, healthcheck `wget -qO- http://localhost:8080/`, porta `"127.0.0.1:${PORTA_FRONTEND:-3000}:8080"`). Sem `restart` policy em nenhum serviço. `.env.example` completo.
   - **Atenção**: no serviço `backend`, os `BANCO_*` são montados a partir de `POSTGRES_*` com host `banco` (ex.: `BANCO_URL: jdbc:postgresql://banco:5432/${POSTGRES_DB:-kontra}`, `BANCO_USUARIO: ${POSTGRES_USER:-kontra}`, `BANCO_SENHA: ${POSTGRES_PASSWORD:-kontra}`) — **nunca** interpolar `${BANCO_URL}`/`${BANCO_USUARIO}`/`${BANCO_SENHA}` do `.env`: um `.env` copiado do exemplo (com `localhost`) quebraria o backend dentro do container.
@@ -232,6 +240,7 @@ Legenda: cada tarefa = 1 commit na branch `feat/marco-0-fundacao` (ADR-010). Flu
   - `curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/qualquer/rota` → `200` (fallback SPA).
   - `curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/swagger-ui/index.html` → `200`.
   - `docker compose exec backend id -u` e `docker compose exec frontend id -u` → diferentes de `0`.
+  - `docker compose logs backend` mostra `Picked up JAVA_TOOL_OPTIONS: -Duser.language=pt -Duser.country=BR`.
   - Com a T10 pronta: `http://localhost:3000` mostra "Operacional" para API e Banco de dados.
   - `docker compose down`.
 - **Depende de**: T2, T6, T8 (e T10 para o último item visual). **Paralela a T9/T10.**
@@ -311,5 +320,5 @@ Legenda: cada tarefa = 1 commit na branch `feat/marco-0-fundacao` (ADR-010). Flu
 | R12 | A verificação de saúde (`/api/saude`) trava com o banco fora (timeout padrão do Hikari é 30 s). | `connection-timeout` 5 s + `isValid(2)`; critério manual de 503 em até 10 s (T6). |
 | R13 | Agentes em paralelo na mesma árvore de trabalho misturam alterações no commit. | Propriedade por pasta (backend/frontend/devops/qa); devops adiciona arquivos por caminho explícito e confere `git diff --staged`. |
 | R14 | Job e2e lento no CI (build das imagens + download do Maven/npm). | Aceito no Marco 0; cache de camadas Docker (buildx/GHA) fica para depois. |
-| R15 | Erros lançados fora do MVC/Security usam o formato padrão do `/error` do Boot. | Lacuna documentada na ARQUITETURA; tratar quando surgir caso real. |
+| R15 | Erros que acontecem **antes** do Spring Security e do servlet (ex.: página 400 do Tomcat para URL com `%` solto) não seguem o contrato de erro. | `/error` próprio e tratamento das rejeições do firewall já cobrem o resto (ARQUITETURA, "Erros fora do Spring MVC"); a página do Tomcat não expõe detalhe interno. Lacuna aceita no Marco 0; tratar se surgir caso real. |
 | R16 | Convenção de idioma aplicada de forma inconsistente (nomes em inglês por hábito dos agentes ou da memória de exemplos). | ADR-013 com tabela de exemplos; o revisor trata nome fora da convenção como IMPORTANTE (BLOQUEANTE quando estiver no contrato da API, pois afeta o cliente gerado). |
