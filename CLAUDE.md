@@ -44,7 +44,7 @@ kontra/
 └── CLAUDE.md
 ```
 
-> Ainda não criado: tudo exceto `.claude/`, `docs/` e este arquivo. A estrutura é criada no Marco 0 (ver `docs/PLANO.md`).
+> Estrutura criada no Marco 0 (ver `docs/PLANO.md` e `docs/STATUS.md`). Visão de uso e comandos para pessoas: `README.md`; contrato da API: `docs/API.md`.
 
 ## Comandos
 

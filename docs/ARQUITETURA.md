@@ -168,7 +168,7 @@ Todas as respostas de erro usam **RFC 9457 (Problem Details)**, `Content-Type: a
 | `instance` | string (`format: uri-reference`) | não | Caminho da requisição (omitido se o caminho não formar uma URI válida). `type` e `instance` são "URI reference" na RFC 9457, por isso o schema usa `uri-reference` (e não `uri`, que exigiria URI absoluta); ajustado na T6. |
 | `codigo` | `CodigoErro` (enum) | sim | Código estável, para o frontend decidir o tratamento. |
 | `ocorridoEm` | string (date-time, UTC) | sim | Momento do erro, com precisão de milissegundos. |
-| `erros` | `ErroDeCampo[]` | não | Só em `ERRO_VALIDACAO`: `{ campo: string, mensagem: string }` (ambos obrigatórios), **ordenados por `campo` e depois por `mensagem`** (saída determinística). `campo` = caminho do campo inválido (ex.: `nome`, `itens[0].quantidade`); `requisicao` para restrições de classe (validação do objeto inteiro — nunca o nome da classe Java); `parametros` para restrições entre parâmetros de método. |
+| `erros` | `ErroDeCampo[]` | não | Só em `ERRO_VALIDACAO`: `{ campo: string, mensagem: string }` (ambos obrigatórios), **ordenados por `campo` e depois por `mensagem`** (saída determinística). `campo` = caminho do campo inválido (ex.: `nome`, `itens[0].quantidade`); `requisicao` para restrições de classe (validação do objeto inteiro — nunca o nome da classe Java); `parametros` para restrições entre parâmetros de método. Falha de conversão de tipo no binding (`FieldError.isBindingFailure()`, ex.: texto num campo numérico) sai com `mensagem` fixa `valor inválido`, sem detalhe técnico (nome de tipo, exceção ou valor). |
 
 Schemas no OpenAPI: `ProblemaResponse`, `ErroDeCampo` e o enum `CodigoErro` (records/enum em `comum/erro`, usados nas anotações `@ApiResponse`), com `requiredMode = REQUIRED` nos campos marcados como obrigatórios acima e `enumAsRef = true` no `CodigoErro`. Um teste de integração garante que o JSON real de erro bate com esses campos. O `Content-Type` é sempre `application/problem+json`, mesmo que o cliente envie `Accept: application/json`.
 
@@ -195,8 +195,36 @@ Schemas no OpenAPI: `ProblemaResponse`, `ErroDeCampo` e o enum `CodigoErro` (rec
 - **`/error`**: o `ErroPadraoController` (`comum/erro`, implementa `ErrorController`) substitui o do Boot e responde pela `FabricaDeProblemas`: status lido de `ERROR_STATUS_CODE` (ausente → 404), `codigo` por `CodigoErro.deStatus`, `instance` = URI original da requisição (`ERROR_REQUEST_URI`). Caminho em `spring.web.error.path` (padrão `/error`); página Whitelabel desligada com `spring.web.error.whitelabel.enabled: false`. **No Spring Boot 4 a família `server.error.*` está depreciada e não é lida — usar sempre `spring.web.error.*`.** O `/error` fica fora do OpenAPI (ver T5 do Marco 0).
 - **Firewall do Spring Security**: o `TratadorRequisicaoRejeitada` (`comum/erro`, implementa o `RequestRejectedHandler` do Security 7) escreve as rejeições do `StrictHttpFirewall` direto pela `FabricaDeProblemas`: 400 `REQUISICAO_MALFORMADA`, com `detail` específico. Casos do firewall: `;` no caminho, `//`, `%2e%2e` (travessia codificada), dupla codificação (`%252e`) e método HTTP desconhecido.
 - **Cabeçalhos de segurança**: as respostas do firewall e do `/error` levam `X-Content-Type-Options: nosniff` e `Cache-Control: no-store`, escritos pela própria `FabricaDeProblemas`/`ErroPadraoController` — o `HeaderWriterFilter` do Spring Security não atua nesses caminhos.
-- **Métodos HTTP incomuns**: `TRACE` é barrado pelo próprio Tomcat e chega pelo `/error` como 405 `METODO_NAO_PERMITIDO`; métodos desconhecidos (ex.: `FOO`) são rejeitados pelo firewall → 400 `REQUISICAO_MALFORMADA`.
+- **Métodos HTTP incomuns**: direto no backend (`:8080`), `TRACE` é barrado pelo próprio Tomcat e chega pelo `/error` como 405 `METODO_NAO_PERMITIDO`; pela origem do frontend (nginx, `:3000`), o próprio nginx responde `TRACE` com 405 em HTML, sem passar pelo backend — mesma lacuna dos erros gerados pelo nginx (ver "Pendências de segurança"); métodos desconhecidos (ex.: `FOO`) são rejeitados pelo firewall → 400 `REQUISICAO_MALFORMADA`.
 - **Única lacuna aceita**: o que o próprio Tomcat recusa **antes** do Spring Security e do servlet sai como a página HTML 400 do Tomcat, sem detalhe interno (não depende da aplicação). Casos medidos: barra codificada (`/api/a%2Fb`), `%` solto, URI acima de 8 KB e cabeçalho acima de 8 KB. Aceito no Marco 0.
+
+## Pendências de segurança
+
+Resultado da auditoria de segurança do Marco 0: 0 crítica, 0 alta, 3 média, 7 baixa. Os itens abaixo são **obrigatórios no momento indicado** — o planejamento do marco correspondente deve incluí-los como tarefas.
+
+**Antes do Marco 1 / do primeiro dado real**
+- Papel de banco próprio da aplicação, sem superuser: script em `docker-entrypoint-initdb.d` criando o papel com `NOSUPERUSER NOCREATEDB NOCREATEROLE`, dono só do esquema da aplicação. Se DDL e DML forem separados, o Flyway usa credencial própria (papel de migração) e a aplicação, um papel só de DML.
+
+**Antes de qualquer ambiente não-dev ou de expor a aplicação**
+- Remover os valores padrão de credenciais do `application.yml` (`BANCO_*` sem fallback): sem variável, a aplicação falha na partida.
+- Swagger UI/OpenAPI desligados por padrão; `true` só em dev.
+- Hardening do compose: `security_opt: no-new-privileges`, `cap_drop: [ALL]` (readicionando só o necessário), `read_only: true` + `tmpfs` para os diretórios graváveis, limites de memória e de PIDs; imagens fixadas por digest.
+- Verificação de saúde: cache curto da resposta de `/api/saude` e `limit_req` no nginx (evita que a rota pública vire amplificador de carga no banco).
+- Cabeçalhos no nginx:
+  - CSP da SPA: `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'` (Emotion/MUI injeta estilos; alternativa: nonce) `; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'`;
+  - CSP das respostas da API: `default-src 'none'; frame-ancestors 'none'`;
+  - `Permissions-Policy` restritiva e `Cross-Origin-Opener-Policy: same-origin`;
+  - HSTS assim que houver TLS.
+- Erros gerados pelo próprio nginx em `/api/` (413, 502, 504) sem cabeçalhos que revelem versão/servidor.
+- Logs do nginx: retenção definida e IP mascarado (LGPD).
+- Imagem de runtime com `apk upgrade` no build (ex.: correção de `libpng`), além da atualização pelo Dependabot.
+
+**Marco de autenticação** (complementa as pendências do ADR-007)
+- Preferir **sessão em cookie** `HttpOnly` + `Secure` + `SameSite` com CSRF habilitado (a SPA está na mesma origem — ADR-005) a JWT guardado em `localStorage`.
+- Senhas com `DelegatingPasswordEncoder` (bcrypt) ou Argon2.
+- Login com rate limit e mensagem uniforme (não revela se o usuário existe).
+- Checagem de dono do recurso (IDOR) em toda operação sobre recurso de usuário, com teste automatizado.
+- `@EnableMethodSecurity` para autorização por método.
 
 ## Decisões técnicas (ADRs)
 
@@ -210,7 +238,9 @@ Schemas no OpenAPI: `ProblemaResponse`, `ErroDeCampo` e o enum `CodigoErro` (rec
 |---|---|---|
 | Java | 21 (Temurin) | LTS instalada no ambiente; Boot 4.1 suporta 17–27. Migrar para 25 LTS é decisão futura. |
 | Spring Boot | **4.1.1** | Padrão atual do Initializr (4.2.0 está em M2). Starters do Boot 4: `spring-boot-starter-webmvc`, `-data-jpa`, `-validation`, `-security`, `-flyway` (+ `flyway-database-postgresql`) e os `*-test` correspondentes. |
-| Gerenciadas pelo Boot 4.1.1 | Spring Framework 7.0.9, Spring Security 7.1.1, Hibernate 7.4.5, Jackson 3.1.5, Flyway 12.4.0, PostgreSQL JDBC 42.7.13, Testcontainers 2.0.5, JUnit Jupiter 6.0.3, Mockito 5.23.0 | Não sobrescrever versões gerenciadas (Flyway 13.x existe, mas fica a do Boot). |
+| Gerenciadas pelo Boot 4.1.1 | Spring Framework 7.0.9, Spring Security 7.1.1, Hibernate 7.4.5, Jackson 3.1.5, Flyway 12.4.0, PostgreSQL JDBC 42.7.13, Testcontainers 2.0.5, JUnit Jupiter 6.0.3, Mockito 5.23.0 | Não sobrescrever versões gerenciadas (Flyway 13.x existe, mas fica a do Boot) — **exceto patches de segurança** (linha abaixo). |
+| Patches de segurança (sobrescrevem o Boot) | `tomcat.version` **11.0.26**, `jackson-bom` **3.1.7**, `jackson-2-bom` **2.21.7** (propriedades no `pom.xml`) | Única exceção à regra acima: CVEs no Tomcat 11.0.24 e no Jackson 3.1.5/2.21.5 gerenciados pelo Boot 4.1.1, sem Boot 4.1.2 disponível (auditoria de segurança do Marco 0). **Remover cada sobrescrita quando o Boot passar a gerenciar versão ≥ a fixada.** Só patch/minor compatível da mesma linha; nunca major. **Todo PR de bump do `spring-boot-starter-parent` deve ser revisado contra estas sobrescritas**: se o novo Boot já gerencia versão ≥, a sobrescrita sai no mesmo PR; se gerencia versão menor, ela fica — sem isso, há risco de downgrade silencioso ou de sobrescrita esquecida. |
+| Atualização de dependências | Dependabot (`.github/dependabot.yml`: `maven`, `npm` — frontend e e2e —, `docker`, `docker-compose`, `github-actions`) | Acompanha CVEs e novas versões, inclusive o momento de remover as sobrescritas acima. Cada PR do Dependabot segue o fluxo normal (revisor + CI). O `dependabot.yml` **ignora** as atualizações que contrariam decisões deste ADR — major do PostgreSQL (19), troca de LTS do Java/Node, TypeScript 7, `@types/node` fora da linha 24 — e o minor do `nginx-unprivileged` (que mudaria para a linha mainline). Mudar qualquer uma dessas linhas é decisão de ADR, não PR automático. O orval tem regra própria (ADR-003). |
 | springdoc-openapi | **3.1.1** (`springdoc-openapi-starter-webmvc-ui`) | Linha 3.x é a do Boot 4; a 3.1.1 é compilada contra Spring Boot 4.1.0 (parent do pom) — compatível com 4.1.1. |
 | Testcontainers | 2.0.5 (via Boot) | Artefatos renomeados no 2.x: `testcontainers-postgresql`, `testcontainers-junit-jupiter`. Compatível com Docker Engine 29. |
 | PostgreSQL | **18** (`postgres:18-alpine`) | Mesma imagem no compose e no Testcontainers. |
@@ -228,7 +258,7 @@ Schemas no OpenAPI: `ProblemaResponse`, `ErroDeCampo` e o enum `CodigoErro` (rec
 | Formulários (a partir do 1º marco com formulário) | react-hook-form 7.89, zod 4.6, @hookform/resolvers 5.9 | Não instalados no Marco 0. |
 | Scripts de instalação npm | `"allowScripts": { "esbuild": false }` no `frontend/package.json` | Política explícita: o `postinstall` do esbuild é desnecessário — o binário vem pelo pacote opcional `@esbuild/<plataforma>` (comprovado com `--ignore-scripts`; o npm 12 já bloqueia scripts por padrão). Novos pacotes com script de instalação entram na lista só com justificativa. |
 | Imagens Docker | `eclipse-temurin:21-jdk` (build), `eclipse-temurin:21-jre-alpine` (runtime), `node:24-alpine` (build), `nginxinc/nginx-unprivileged:1.30-alpine` (runtime) | |
-| GitHub Actions | `actions/checkout@v7`, `actions/setup-java@v6`, `actions/setup-node@v7`, `actions/upload-artifact@v7` | |
+| GitHub Actions | `actions/checkout` v7.0.1, `actions/setup-java` v6.0.1, `actions/setup-node` v7.0.0, `actions/upload-artifact` v7.0.1, `actions/cache` v6.1.0 | Fixadas por SHA do commit no workflow (versão em comentário), por segurança da cadeia de suprimentos; o Dependabot atualiza. |
 
 **Consequências.** Majors recentes (Boot 4, Vite 8, React Router 8, MUI 9, Vitest 5) podem ter APIs diferentes da memória dos agentes: consultar a documentação oficial da versão. Se uma versão bloquear, o agente avisa e propõe fixar a major anterior; o arquiteto atualiza este ADR. O `CLAUDE.md` cita "JUnit 5": no Boot 4.1 a JUnit Jupiter é a 6.x, com a mesma API Jupiter.
 
@@ -248,7 +278,7 @@ Schemas no OpenAPI: `ProblemaResponse`, `ErroDeCampo` e o enum `CodigoErro` (rec
 
 **Decisão.** orval 8.40.0 com `client: 'react-query'`, `httpClient: 'fetch'`, `mode: 'tags-split'`, `clean: true`, saída em `src/api/generated/` (`endpoints/` e `model/`) e `override.mutator` apontando para `src/lib/cliente-api.ts` (`requisicaoApi`). **`override.fetch.includeHttpResponseReturnType: false`**: funções e hooks devolvem o **corpo** tipado (ex.: `obterSaude(): Promise<SaudeResponse>`), sem o envelope `{ data, status, headers }`; status de erro chega pelo `ErroApi`. Tipo de erro dos hooks: `ErrorType` exportado pelo mutator (`ErroApi | Error`). Sem geração de mocks no Marco 0.
 
-**Consequências.** Hooks TanStack Query e query keys gerados — nada de tipos ou chaves escritos à mão. Os nomes gerados seguem o `operationId` em português com os prefixos do orval (`useObterSaude`, `getObterSaudeQueryKey`). openapi-typescript foi descartado também por exigir `typescript ^5` como peer (conflita com o TS 6.0 do projeto). A forma de tratar erros fica concentrada no mutator. Sem o envelope, status e cabeçalhos de **sucesso** não ficam acessíveis: se um endpoint futuro precisar deles (ex.: `Location` em um 201, `ETag`), a forma de expô-los é decidida em ADR nessa hora.
+**Consequências.** Hooks TanStack Query e query keys gerados — nada de tipos ou chaves escritos à mão. Os nomes gerados seguem o `operationId` em português com os prefixos do orval (`useObterSaude`, `getObterSaudeQueryKey`). openapi-typescript foi descartado também por exigir `typescript ^5` como peer (conflita com o TS 6.0 do projeto). A forma de tratar erros fica concentrada no mutator. O orval é fixado na versão exata e **todo upgrade dele é "bump + `npm run generate:api` no mesmo PR"** (senão o CI falha no `git diff` do cliente gerado); por isso o Dependabot trata o orval fora do grupo de patches, em PR próprio, que precisa receber o cliente regenerado antes do merge. Sem o envelope, status e cabeçalhos de **sucesso** não ficam acessíveis: se um endpoint futuro precisar deles (ex.: `Location` em um 201, `ETag`), a forma de expô-los é decidida em ADR nessa hora.
 
 ### ADR-004 — Snapshot do OpenAPI versionado e cliente gerado versionado
 
@@ -296,7 +326,8 @@ Schemas no OpenAPI: `ProblemaResponse`, `ErroDeCampo` e o enum `CodigoErro` (rec
 **Pendências obrigatórias do marco de autenticação** (e itens da auditoria de segurança):
 - reavaliar CSRF conforme o mecanismo escolhido (obrigatório reabilitar se houver autenticação por cookie);
 - o 401 do Marco 0 sai **sem** o cabeçalho `WWW-Authenticate`, que a RFC 9110 exige em toda resposta 401 — não há esquema de autenticação a anunciar. Ao escolher o mecanismo, o `TratadorNaoAutenticado` passa a enviar o desafio correspondente (ex.: `Bearer`);
-- `HEAD /api/saude` responde 401, porque só o `GET` é público (os healthchecks usam `GET` — sem impacto no Marco 0). Decidir se `HEAD` acompanha o `GET` nas rotas públicas.
+- `HEAD /api/saude` responde 401, porque só o `GET` é público (os healthchecks usam `GET` — sem impacto no Marco 0). Decidir se `HEAD` acompanha o `GET` nas rotas públicas;
+- os itens de "Pendências de segurança → Marco de autenticação" (sessão em cookie com CSRF em vez de JWT em `localStorage`, encoder de senha, rate limit e mensagem uniforme no login, IDOR, `@EnableMethodSecurity`).
 
 ### ADR-008 — Verificação de saúde própria em `/api/saude` em vez do Actuator
 
@@ -344,7 +375,7 @@ Schemas no OpenAPI: `ProblemaResponse`, `ErroDeCampo` e o enum `CodigoErro` (rec
 
 **Contexto.** Configuração deve vir do ambiente, com `.env.example` na raiz.
 
-**Decisão.** O `docker compose` lê `.env` da raiz (fora do git) e tem padrões de desenvolvimento embutidos (`${VAR:-padrão}`), então `docker compose up` funciona sem `.env`. O backend lê `BANCO_URL`, `BANCO_USUARIO`, `BANCO_SENHA` com padrões que apontam para o PostgreSQL do compose (`jdbc:postgresql://localhost:5432/kontra`, `kontra`/`kontra`) — **credenciais apenas de desenvolvimento**; qualquer ambiente real deve sobrescrevê-las. Variáveis só de dev local do frontend (`DESTINO_PROXY_API`) são lidas pelo `vite.config.ts`, não expostas ao bundle (sem prefixo `VITE_`). Variáveis impostas por terceiros mantêm o nome original (`POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` da imagem oficial; `SPRINGDOC_*` do binding do Spring). Lista completa no `docs/PLANO.md` (Marco 0) e no `.env.example`.
+**Decisão.** O `docker compose` lê `.env` da raiz (fora do git) e tem padrões de desenvolvimento embutidos (`${VAR:-padrão}`), então `docker compose up` funciona sem `.env`. O backend lê `BANCO_URL`, `BANCO_USUARIO`, `BANCO_SENHA` com padrões que apontam para o PostgreSQL do compose (`jdbc:postgresql://localhost:5432/kontra`, `kontra`/`kontra`) — **credenciais apenas de desenvolvimento**; qualquer ambiente real deve sobrescrevê-las, e antes de qualquer ambiente não-dev o fallback é removido (ver "Pendências de segurança"). Variáveis só de dev local do frontend (`DESTINO_PROXY_API`) são lidas pelo `vite.config.ts`, não expostas ao bundle (sem prefixo `VITE_`). Variáveis impostas por terceiros mantêm o nome original (`POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` da imagem oficial; `SPRINGDOC_*` do binding do Spring). Lista completa no `docs/PLANO.md` (Marco 0) e no `.env.example`.
 - Só o `docker compose` lê o `.env` da raiz. `BANCO_*` (backend fora do container), `DESTINO_PROXY_API` e `URL_BASE_E2E` são exportadas no shell ou na IDE quando for preciso mudar o padrão; o `.env.example` as lista como referência.
 - No compose, o serviço `backend` recebe `BANCO_*` montadas a partir de `POSTGRES_*` com host `banco`; nunca interpola `BANCO_*` do `.env` (que, copiado do exemplo, apontaria para `localhost`).
 
@@ -365,6 +396,7 @@ Schemas no OpenAPI: `ProblemaResponse`, `ErroDeCampo` e o enum `CodigoErro` (rec
    - campos padrão do RFC 9457: `type`, `title`, `status`, `detail`, `instance`;
    - **vocabulário de camada do Spring**: sufixos `Controller`, `Service`, `Repository`, `Dto` (e as variantes de DTO `Request`/`Response`), e os pacotes de camada correspondentes;
    - nomes gerados por ferramentas a partir dos nossos nomes (orval: `use` + operationId, `get…QueryKey`) e nomes que a ferramenta exige de nós (orval: o tipo `ErrorType` exportado pelo mutator);
+   - textos gerados por ferramentas: o Dependabot escreve as mensagens de commit/PR em inglês (`bump X from a to b`); só o prefixo é configurável e fica em Conventional Commits (`chore(deps)`, `chore(ci)`);
    - nomes próprios, siglas e jargão consagrado: Kontra, OpenAPI, API, JSON, URL, backend, frontend, e2e, status.
 3. **Decisões do arquiteto nos pontos não cobertos pelo usuário** *(confirmado pelo usuário em 2026-10-06)*:
    - **Pacotes técnicos do backend**: `config` e `domain` ficam em inglês, como os demais pacotes de camada (`controller`, `service`, `repository`, `dto`); classes em `config/` usam o sufixo `Config` (`SegurancaConfig`, `OpenApiConfig`, `TestcontainersConfig`). Pacotes que não são camada vão para o português: `comum/erro`, `suporte` (testes), e os módulos (`saude`, `contrato`).
