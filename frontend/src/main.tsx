@@ -1,6 +1,8 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { Aplicacao } from '@/app/Aplicacao'
+import { RouterProvider } from 'react-router/dom'
+import { ProvedoresDaAplicacao } from '@/app/provedores'
+import { criarRoteador } from '@/app/roteador'
 
 const raiz = document.getElementById('root')
 if (!raiz) {
@@ -9,6 +11,8 @@ if (!raiz) {
 
 createRoot(raiz).render(
   <StrictMode>
-    <Aplicacao />
+    <ProvedoresDaAplicacao>
+      <RouterProvider router={criarRoteador()} />
+    </ProvedoresDaAplicacao>
   </StrictMode>,
 )
