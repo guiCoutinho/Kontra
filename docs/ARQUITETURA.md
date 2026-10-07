@@ -27,9 +27,11 @@ Dev local:  Navegador ──► Vite :5173 ──(proxy /api)──► backend :
 
 | Serviço | Dev local | docker compose (host → container) |
 |---|---|---|
-| Frontend | `5173` (Vite) | `${PORTA_FRONTEND:-3000}` → `8080` (nginx não root) |
-| Backend | `8080` | `${PORTA_BACKEND:-8080}` → `8080` |
-| PostgreSQL | `5432` (serviço `banco` do compose) | `${PORTA_POSTGRES:-5432}` → `5432` |
+| Frontend | `5173` (Vite) | `127.0.0.1:${PORTA_FRONTEND:-3000}` → `8080` (nginx não root) |
+| Backend | `8080` | `127.0.0.1:${PORTA_BACKEND:-8080}` → `8080` |
+| PostgreSQL | `5432` (serviço `banco` do compose) | `127.0.0.1:${PORTA_POSTGRES:-5432}` → `5432` |
+
+No Marco 0, **todas** as portas do compose (inclusive a do frontend) são publicadas só no loopback (`127.0.0.1`): ficam acessíveis em `localhost`, mas não pela rede local. Expor na rede é decisão de um marco futuro (com autenticação). O compose não usa `restart` policy no Marco 0.
 
 Swagger UI fica no backend (`http://localhost:8080/swagger-ui.html`); o nginx do frontend não repassa `/swagger-ui` nem `/v3/api-docs`.
 
@@ -322,6 +324,8 @@ Lacuna conhecida: erros lançados em filtros fora do Spring Security caem no `/e
 **Contexto.** Configuração deve vir do ambiente, com `.env.example` na raiz.
 
 **Decisão.** O `docker compose` lê `.env` da raiz (fora do git) e tem padrões de desenvolvimento embutidos (`${VAR:-padrão}`), então `docker compose up` funciona sem `.env`. O backend lê `BANCO_URL`, `BANCO_USUARIO`, `BANCO_SENHA` com padrões que apontam para o PostgreSQL do compose (`jdbc:postgresql://localhost:5432/kontra`, `kontra`/`kontra`) — **credenciais apenas de desenvolvimento**; qualquer ambiente real deve sobrescrevê-las. Variáveis só de dev local do frontend (`DESTINO_PROXY_API`) são lidas pelo `vite.config.ts`, não expostas ao bundle (sem prefixo `VITE_`). Variáveis impostas por terceiros mantêm o nome original (`POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` da imagem oficial; `SPRINGDOC_*` do binding do Spring). Lista completa no `docs/PLANO.md` (Marco 0) e no `.env.example`.
+- Só o `docker compose` lê o `.env` da raiz. `BANCO_*` (backend fora do container), `DESTINO_PROXY_API` e `URL_BASE_E2E` são exportadas no shell ou na IDE quando for preciso mudar o padrão; o `.env.example` as lista como referência.
+- No compose, o serviço `backend` recebe `BANCO_*` montadas a partir de `POSTGRES_*` com host `banco`; nunca interpola `BANCO_*` do `.env` (que, copiado do exemplo, apontaria para `localhost`).
 
 **Consequências.** Um comando sobe tudo; o risco de credencial padrão em ambiente real fica registrado para a auditoria de segurança.
 
@@ -341,7 +345,7 @@ Lacuna conhecida: erros lançados em filtros fora do Spring Security caem no `/e
    - **vocabulário de camada do Spring**: sufixos `Controller`, `Service`, `Repository`, `Dto` (e as variantes de DTO `Request`/`Response`), e os pacotes de camada correspondentes;
    - nomes gerados por ferramentas a partir dos nossos nomes (orval: `use` + operationId, `get…QueryKey`);
    - nomes próprios, siglas e jargão consagrado: Kontra, OpenAPI, API, JSON, URL, backend, frontend, e2e, status.
-3. **Decisões do arquiteto nos pontos não cobertos pelo usuário** *(a confirmar com o usuário em caso de dúvida)*:
+3. **Decisões do arquiteto nos pontos não cobertos pelo usuário** *(confirmado pelo usuário em 2026-10-06)*:
    - **Pacotes técnicos do backend**: `config` e `domain` ficam em inglês, como os demais pacotes de camada (`controller`, `service`, `repository`, `dto`); classes em `config/` usam o sufixo `Config` (`SegurancaConfig`, `OpenApiConfig`, `TestcontainersConfig`). Pacotes que não são camada vão para o português: `comum/erro`, `suporte` (testes), e os módulos (`saude`, `contrato`).
    - **Classe principal**: `KontraApplication` (convenção do Spring Boot gerada pelo Initializr, mesma família dos sufixos de camada).
    - **Pastas estruturais do frontend** ficam em inglês, como o `features/` do exemplo do usuário: `app/`, `api/generated/` (`endpoints/`, `model/`), `lib/`, `components/`, `features/`, `routes/`, `test/`; e `e2e/tests/`. Tudo dentro delas (módulos, componentes, arquivos) em português.

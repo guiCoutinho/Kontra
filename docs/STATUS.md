@@ -16,11 +16,16 @@ Marco 0 — Fundação (execução)
 
 - Convenção de idioma definida pelo usuário: tudo em português, mantendo sufixos de camada Spring (`CLAUDE.md`).
 
-- Arquiteto aplicou a convenção de idioma em `docs/` e `CLAUDE.md` (ADR-013, risco R16).
+- Arquiteto aplicou a convenção de idioma em `docs/` e `CLAUDE.md` (ADR-013, risco R16). Usuário confirmou os casos de fronteira em inglês (pacotes de camada/config, `KontraApplication`, pastas estruturais do frontend, scripts npm, nomes impostos por terceiros).
+
+- **T1 concluída** (DevOps): commit raiz `55288be` na `main` (14 arquivos), branch `feat/marco-0-fundacao`, remoto `origin` sem push. Revisor: APROVADO; QA dispensado (sem comportamento a testar; critérios conferidos pelo Revisor e pelo orquestrador).
 
 ## Em andamento
 
-- T1 parte 2 (DevOps): ajustes do `.gitignore`/`.gitattributes` sugeridos pelo Revisor, identidade git local, commit raiz na `main`, branch `feat/marco-0-fundacao`.
+- Onda 2 (em paralelo):
+  - T2 (DevOps) compose com PostgreSQL — Revisor: APROVADO com ajustes (porta em 127.0.0.1, healthcheck TCP, sem `restart`, `.env.example` mais claro); ajustes aplicados pelo DevOps; plano ajustado pelo Arquiteto (T2, T11, variáveis, ADR-012, R10). QA: APROVADO (porta só no loopback, 1ª subida estável em 3 ciclos, overrides, persistência, entradas inválidas). Em commit.
+  - T3 (Backend) projeto Spring Boot — entregue (`./mvnw verify` OK, V1 aplicada); na fila do Revisor.
+  - T7 (Frontend) projeto React — entregue, em revisão.
 
 ## Bloqueado
 
@@ -28,7 +33,9 @@ Marco 0 — Fundação (execução)
 
 ## Notas para próximas tarefas
 
+- T4: avaliar `-javaagent` do Mockito no argLine (aviso de self-attaching no JDK 21+), apontado pelo Backend na T3.
 - T3 (commit): `backend/mvnw` precisa entrar com `git add --chmod=+x` e `git ls-files -s backend/mvnw` → `100755` (a máquina usa `core.filemode=false`).
+- Auditoria de segurança (fim do marco): a aplicação conecta ao PostgreSQL como superusuário (`POSTGRES_USER` da imagem) — criar papel próprio sem superuser quando houver dados reais (R10).
 - O `.gitignore` final difere um pouco da especificação da T1 em `docs/PLANO.md` (sem `build/`, `coverage/` ancorado, `.vscode` em qualquer nível, arquivos de IDE do backend), conforme a revisão.
 
 ## Histórico de marcos

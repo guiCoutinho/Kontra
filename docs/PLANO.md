@@ -105,6 +105,8 @@ Exemplos:
 
 O `.env.example` na raiz lista todas, agrupadas por consumidor, sem segredos reais. O compose usa `${VAR:-padrão}` e funciona sem `.env`.
 
+**Quem lê o `.env` da raiz**: só o `docker compose` (`POSTGRES_*` e `PORTA_*`). `BANCO_*` (backend rodando fora do container), `DESTINO_PROXY_API` (Vite) e `URL_BASE_E2E` (Playwright) **não** são lidas do `.env` — quando for preciso mudar o padrão, exportar no shell ou na configuração de execução da IDE. O `.env.example` as lista apenas como referência. Dentro do compose, o backend recebe `BANCO_*` montadas a partir de `POSTGRES_*` (ver T11).
+
 ### Tarefas
 
 Legenda: cada tarefa = 1 commit na branch `feat/marco-0-fundacao` (ADR-010). Fluxo por tarefa: implementa → revisor → qa → devops commita. Nomes conforme ADR-013. Comandos de backend no Git Bash (`./mvnw`); no PowerShell use `.\mvnw.cmd`. Testes `*IT` exigem o Docker em execução.
@@ -125,7 +127,7 @@ Legenda: cada tarefa = 1 commit na branch `feat/marco-0-fundacao` (ADR-010). Flu
 
 **T2 — docker compose com PostgreSQL + `.env.example` inicial** · `devops`
 - **Área**: `docker-compose.yml` (só o serviço `banco` por enquanto), `.env.example`.
-- **Fazer**: `name: kontra`; serviço `banco` com `postgres:18-alpine`, `POSTGRES_DB/USER/PASSWORD` com padrões `kontra`, porta `${PORTA_POSTGRES:-5432}:5432`, volume nomeado `kontra-dados-banco` montado em **`/var/lib/postgresql`** (layout do PG 18), healthcheck `pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}`. `.env.example` com as variáveis de banco/portas da tabela acima.
+- **Fazer**: `name: kontra`; serviço `banco` com `postgres:18-alpine`, `POSTGRES_DB/USER/PASSWORD` com padrões `kontra`, porta publicada só no loopback `"127.0.0.1:${PORTA_POSTGRES:-5432}:5432"`, volume nomeado `kontra-dados-banco` montado em **`/var/lib/postgresql`** (layout do PG 18), healthcheck por TCP `pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}`, sem `restart` policy. `.env.example` com as variáveis de banco/portas da tabela acima.
 - **Pronto**:
   - `docker compose config` sem erro.
   - `docker compose up -d banco --wait` → exit 0; `docker compose ps` → `banco` `healthy`.
@@ -222,7 +224,8 @@ Legenda: cada tarefa = 1 commit na branch `feat/marco-0-fundacao` (ADR-010). Flu
 - **Fazer**:
   - Backend: build em `eclipse-temurin:21-jdk` (`chmod +x mvnw`, camada de dependências com `./mvnw -B dependency:go-offline`, depois `./mvnw -B -DskipTests package`); runtime `eclipse-temurin:21-jre-alpine`, usuário não root, `EXPOSE 8080`.
   - Frontend: build em `node:24-alpine` (`npm ci && npm run build`; o cliente gerado já está versionado); runtime `nginxinc/nginx-unprivileged:1.30-alpine` ouvindo 8080; `nginx.conf` com `location /api/ { proxy_pass http://backend:8080; ... }` (sem barra final, preserva `/api`), cabeçalhos `X-Forwarded-*`, fallback SPA `try_files $uri $uri/ /index.html`, `index.html` com `Cache-Control: no-cache`, `/assets/` com cache longo `immutable`.
-  - Compose: `backend` (variáveis `BANCO_*` derivadas de `POSTGRES_*`, `depends_on: banco: service_healthy`, healthcheck `wget -qO- http://localhost:8080/api/saude`, porta `${PORTA_BACKEND:-8080}:8080`); `frontend` (`depends_on: backend: service_healthy`, healthcheck `wget -qO- http://localhost:8080/`, porta `${PORTA_FRONTEND:-3000}:8080`). `.env.example` completo.
+  - Compose: `backend` (variáveis `BANCO_*` derivadas de `POSTGRES_*`, `depends_on: banco: service_healthy`, healthcheck `wget -qO- http://localhost:8080/api/saude`, porta `"127.0.0.1:${PORTA_BACKEND:-8080}:8080"`); `frontend` (`depends_on: backend: service_healthy`, healthcheck `wget -qO- http://localhost:8080/`, porta `"127.0.0.1:${PORTA_FRONTEND:-3000}:8080"`). Sem `restart` policy em nenhum serviço. `.env.example` completo.
+  - **Atenção**: no serviço `backend`, os `BANCO_*` são montados a partir de `POSTGRES_*` com host `banco` (ex.: `BANCO_URL: jdbc:postgresql://banco:5432/${POSTGRES_DB:-kontra}`, `BANCO_USUARIO: ${POSTGRES_USER:-kontra}`, `BANCO_SENHA: ${POSTGRES_PASSWORD:-kontra}`) — **nunca** interpolar `${BANCO_URL}`/`${BANCO_USUARIO}`/`${BANCO_SENHA}` do `.env`: um `.env` copiado do exemplo (com `localhost`) quebraria o backend dentro do container.
 - **Pronto**:
   - `docker compose config` sem erro; `docker compose up -d --build --wait` → exit 0; `docker compose ps` → `banco`, `backend`, `frontend` `healthy`.
   - `curl -s http://localhost:3000/api/saude` → JSON com `"status":"DISPONIVEL"`.
@@ -303,7 +306,7 @@ Legenda: cada tarefa = 1 commit na branch `feat/marco-0-fundacao` (ADR-010). Flu
 | R7 | Testcontainers no Windows: Docker parado ou incompatível. | `./mvnw verify` exige Docker em execução (documentado); Docker 29 exige Testcontainers ≥ 2.0.2 — o Boot 4.1.1 traz 2.0.5. `./mvnw test` funciona sem Docker. |
 | R8 | PostgreSQL 18 mudou o layout de dados da imagem (volume em `/var/lib/postgresql/data` não persiste corretamente). | Volume montado em `/var/lib/postgresql` (T2). |
 | R9 | Conflito de portas no Windows (PostgreSQL local na 5432, outros serviços na 8080/3000). | Portas do host configuráveis (`PORTA_POSTGRES`, `PORTA_BACKEND`, `PORTA_FRONTEND`). |
-| R10 | Credenciais padrão de desenvolvimento (`kontra`/`kontra`) versionadas em `application.yml`/compose. | Marcadas como só-dev (ADR-012); ambientes reais sobrescrevem por variável; item da auditoria de segurança do fim do marco. |
+| R10 | Credenciais padrão de desenvolvimento (`kontra`/`kontra`) versionadas em `application.yml`/compose; além disso, a aplicação conecta como **superusuário** (o `POSTGRES_USER` da imagem oficial é superuser). | Marcadas como só-dev (ADR-012); ambientes reais sobrescrevem por variável; portas publicadas só em `127.0.0.1`. Quando houver dados reais, criar um papel próprio da aplicação, sem superuser (dono só do esquema da aplicação). Itens da auditoria de segurança do fim do marco. |
 | R11 | Swagger/OpenAPI públicos. | Aceito no Marco 0 (sem produção); desligável por variável; reavaliar no marco de autenticação. |
 | R12 | A verificação de saúde (`/api/saude`) trava com o banco fora (timeout padrão do Hikari é 30 s). | `connection-timeout` 5 s + `isValid(2)`; critério manual de 503 em até 10 s (T6). |
 | R13 | Agentes em paralelo na mesma árvore de trabalho misturam alterações no commit. | Propriedade por pasta (backend/frontend/devops/qa); devops adiciona arquivos por caminho explícito e confere `git diff --staged`. |
