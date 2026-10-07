@@ -14,6 +14,7 @@ import java.util.Set;
 import java.util.TreeSet;
 
 import org.junit.jupiter.api.Test;
+import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -30,7 +31,9 @@ import br.com.kontra.suporte.TesteDeIntegracao;
  * <li>sem a propriedade: compara o gerado com o arquivo como árvore JSON (imune a CRLF/LF, indentação e ordem
  * das chaves) e falha, citando o comando de atualização, se forem diferentes;
  * <li>com {@code -Dopenapi.atualizarSnapshot=true}: regrava o arquivo (JSON indentado, LF, newline final) e
- * passa.
+ * passa — exceto com a variável de ambiente {@code CI} definida, quando recusa e falha (no CI o snapshot só é
+ * comparado);
+ * <li>arquivo ausente ou com JSON inválido: falha citando o arquivo e o comando de atualização.
  * </ul>
  */
 @TesteDeIntegracao
@@ -40,8 +43,11 @@ class SnapshotOpenApiIT {
 
 	static final String COMANDO_DE_ATUALIZACAO = "./mvnw verify -D" + PROPRIEDADE_ATUALIZAR_SNAPSHOT + "=true";
 
+	/** Definida pelos serviços de CI (ex.: o GitHub Actions define {@code CI=true}). */
+	static final String VARIAVEL_DE_AMBIENTE_CI = "CI";
+
 	/** {@code basedir} é definido pelo Surefire/Failsafe; numa IDE, o diretório de trabalho é o do módulo. */
-	private static final Path ARQUIVO_DO_SNAPSHOT = Path.of(System.getProperty("basedir", "."), "openapi",
+	static final Path ARQUIVO_DO_SNAPSHOT = Path.of(System.getProperty("basedir", "."), "openapi",
 			"openapi.json");
 
 	private static final int MAXIMO_DE_DIFERENCAS_LISTADAS = 20;
@@ -57,15 +63,18 @@ class SnapshotOpenApiIT {
 		String contratoGerado = obterContratoGerado();
 
 		if (Boolean.getBoolean(PROPRIEDADE_ATUALIZAR_SNAPSHOT)) {
+			if (System.getenv(VARIAVEL_DE_AMBIENTE_CI) != null) {
+				fail("""
+						Regravação do snapshot recusada: a variável de ambiente %s está definida.
+						No CI o snapshot (%s) só é comparado, nunca regravado. Rode `%s` na sua máquina e commite o \
+						arquivo.""", VARIAVEL_DE_AMBIENTE_CI, ARQUIVO_DO_SNAPSHOT.toAbsolutePath().normalize(),
+						COMANDO_DE_ATUALIZACAO);
+			}
 			regravarSnapshot(contratoGerado);
 			return;
 		}
 
-		if (!Files.exists(ARQUIVO_DO_SNAPSHOT)) {
-			fail("O snapshot do contrato OpenAPI não existe (%s). Rode `%s` e versione o arquivo.",
-					ARQUIVO_DO_SNAPSHOT.toAbsolutePath().normalize(), COMANDO_DE_ATUALIZACAO);
-		}
-		JsonNode esperado = this.jsonMapper.readTree(Files.readString(ARQUIVO_DO_SNAPSHOT, StandardCharsets.UTF_8));
+		JsonNode esperado = lerSnapshot(this.jsonMapper);
 		JsonNode gerado = this.jsonMapper.readTree(contratoGerado);
 		if (!esperado.equals(gerado)) {
 			List<String> diferencas = new ArrayList<>();
@@ -94,6 +103,28 @@ class SnapshotOpenApiIT {
 		assertThat(contrato.at("/servers/0/url").asString()).isEqualTo("/");
 		// Nem /error (ErroPadraoController) nem rotas de teste ou técnicas entram no contrato.
 		assertThat(contrato.path("paths").propertyNames()).allSatisfy(caminho -> assertThat(caminho).startsWith("/api/"));
+	}
+
+	/**
+	 * Lê o snapshot versionado. Arquivo ausente ou com JSON inválido falha com mensagem que cita o arquivo e o
+	 * comando de atualização (em vez da exceção crua do Jackson). Usado também pelo {@link AderenciaAoContratoIT}.
+	 */
+	static JsonNode lerSnapshot(JsonMapper jsonMapper) throws Exception {
+		if (!Files.exists(ARQUIVO_DO_SNAPSHOT)) {
+			return fail("O snapshot do contrato OpenAPI não existe (%s). Rode `%s` e versione o arquivo.",
+					ARQUIVO_DO_SNAPSHOT.toAbsolutePath().normalize(), COMANDO_DE_ATUALIZACAO);
+		}
+		String conteudo = Files.readString(ARQUIVO_DO_SNAPSHOT, StandardCharsets.UTF_8);
+		try {
+			return jsonMapper.readTree(conteudo);
+		}
+		catch (JacksonException ex) {
+			return fail("""
+					O snapshot do contrato OpenAPI (%s) não é um JSON válido: %s
+					O arquivo é gerado, não editado à mão. Rode `%s` para regravá-lo a partir do código e commite o \
+					resultado.""", ARQUIVO_DO_SNAPSHOT.toAbsolutePath().normalize(), ex.getOriginalMessage(),
+					COMANDO_DE_ATUALIZACAO);
+		}
 	}
 
 	private String obterContratoGerado() throws Exception {

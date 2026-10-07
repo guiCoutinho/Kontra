@@ -41,6 +41,9 @@ springdoc:
   writer-with-default-pretty-printer: true
   # Só a API (ADR-005) entra no contrato: /error e outras rotas técnicas ficam de fora.
   paths-to-match: /api/**
+  # As respostas de erro de cada operação são só as declaradas nela (@ApiResponse); nada é injetado a partir
+  # do @RestControllerAdvice (ADR-004, item 6).
+  override-with-generic-response: false
   # Ligados explicitamente (sem isso o springdoc avisa no log). Para desligar num ambiente, use as variáveis
   # SPRINGDOC_API_DOCS_ENABLED=false e SPRINGDOC_SWAGGER_UI_ENABLED=false (têm precedência sobre este arquivo).
   api-docs:

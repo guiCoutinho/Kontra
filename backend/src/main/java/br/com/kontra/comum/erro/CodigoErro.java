@@ -1,5 +1,7 @@
 package br.com.kontra.comum.erro;
 
+import io.swagger.v3.oas.annotations.media.Schema;
+
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 
@@ -8,6 +10,8 @@ import org.springframework.http.HttpStatusCode;
  *
  * <p>O frontend decide o tratamento pelo código; o {@code title} da resposta é fixo por código.
  */
+@Schema(enumAsRef = true, description = "Código estável do erro. Códigos genéricos (ERRO_REQUISICAO, ERRO_INTERNO) "
+		+ "devem ser tratados exibindo o detail.")
 public enum CodigoErro {
 
 	ERRO_VALIDACAO(HttpStatus.BAD_REQUEST, "Dados inválidos", "A requisição contém campos inválidos."),
