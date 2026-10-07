@@ -4,7 +4,7 @@
 
 ## Marco atual
 
-**Marco 0 — Fundação: implementação concluída (T1–T14).** Falta só a **T15 — merge na `main`**, que depende da aprovação do usuário (e o push para o GitHub, também pendente de aprovação).
+**Marco 0 — Fundação: concluído.** T1–T14 implementadas; **T15 — merge na `main` aprovado pelo usuário em 2026-10-07** (merge `--no-ff` de `feat/marco-0-fundacao`). Push para o GitHub ainda pendente de aprovação.
 
 ## Feito
 
@@ -39,7 +39,6 @@
 
 ## Bloqueado
 
-- **T15 — merge na `main`**: aguarda aprovação do usuário (regra do projeto).
 - **Push para `origin`** (`github.com/guiCoutinho/Kontra`): aguarda aprovação do usuário. O CI só roda de verdade depois dele (R1).
 
 ## Decisões tomadas no modo autônomo (2026-10-07, madrugada, usuário dormindo)
@@ -55,7 +54,7 @@
 
 ## Para o usuário decidir
 
-1. **Aprovar a T15** (merge `--no-ff` de `feat/marco-0-fundacao` na `main`).
+1. ~~Aprovar a T15~~ — aprovada em 2026-10-07.
 2. **Aprovar o push** para `origin` (e acompanhar o primeiro run do CI).
 3. **E-mail nos commits**: os 19 commits têm o seu e-mail pessoal como autor (como você pediu). Se o repositório for público, ele fica público; dá para trocar pelo e-mail noreply do GitHub e reescrever a branch **antes** do primeiro push (barato agora, caro depois).
 4. **Terminais extras** (Revisor 2, QA 2): manter ou dispensar.
@@ -70,4 +69,4 @@
 
 ## Histórico de marcos
 
-- **Marco 0 — Fundação** (2026-10-06 → 2026-10-07): implementação concluída em ~6 h; 19 commits na `feat/marco-0-fundacao`; 3 reprovações em revisão (T9, T10, T12), todas resolvidas no 2º ciclo; auditoria de segurança sem achados críticos/altos após correção. Merge e push pendentes de aprovação.
+- **Marco 0 — Fundação** (2026-10-06 → 2026-10-07): implementação concluída em ~6 h; 19 commits na `feat/marco-0-fundacao`; 3 reprovações em revisão (T9, T10, T12), todas resolvidas no 2º ciclo; auditoria de segurança sem achados críticos/altos após correção. Merge na `main` aprovado e feito em 2026-10-07; push pendente de aprovação.
