@@ -44,3 +44,5 @@ Thumbs.db
 /backend/.settings/
 /backend/.factorypath
 /backend/bin/
+/backend/.apt_generated/
+/backend/nbproject/
