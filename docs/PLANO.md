@@ -70,7 +70,7 @@ Exemplos:
 
 #### Schemas comuns (formato de erro)
 
-`ProblemaResponse`, `ErroDeCampo` e `CodigoErro` (enum nomeado, `enumAsRef = true`), conforme `docs/ARQUITETURA.md` → "Formato padronizado de erro" (extensões `codigo`, `ocorridoEm`, `erros[]` com `campo`/`mensagem`; `title` em pt-BR por código; `detail` sempre presente; 4xx sem código próprio → `ERRO_REQUISICAO` com o status real, 5xx → `ERRO_INTERNO`). Precisam aparecer em `components.schemas` do snapshot já no Marco 0 (referenciados pela resposta 500 de `/api/saude`), para o frontend tipar o `ErroApi`.
+`ProblemaResponse`, `ErroDeCampo` e `CodigoErro` (enum nomeado, `enumAsRef = true`), conforme `docs/ARQUITETURA.md` → "Formato padronizado de erro" (extensões `codigo`, `ocorridoEm`, `erros[]` com `campo`/`mensagem`; `title` em pt-BR por código; `detail` sempre presente; 4xx sem código próprio → `ERRO_REQUISICAO` com o status real, 5xx → `ERRO_INTERNO`; `type` e `instance` com `format: uri-reference`, como a RFC 9457 define — ajustado na T6). Precisam aparecer em `components.schemas` do snapshot já no Marco 0 (referenciados pela resposta 500 de `/api/saude`), para o frontend tipar o `ErroApi`.
 
 #### Comportamento global (não entra no cliente gerado)
 
@@ -215,7 +215,7 @@ Legenda: cada tarefa = 1 commit na branch `feat/marco-0-fundacao` (ADR-010). Flu
 
 **T9 — Geração do cliente com orval + mutator** · `frontend`
 - **Área**: `frontend/orval.config.ts`, `src/lib/cliente-api.ts` (+ `cliente-api.test.ts`), `src/api/generated/**` (gerado, versionado), `package.json` (`orval` **8.40.0 exata**, script `generate:api`: `orval`), `.oxlintrc.json` (ignorar `src/api/generated`).
-- **Fazer**: conforme ADR-003/ADR-004; entrada `../backend/openapi/openapi.json` (somente leitura). `requisicaoApi` e `ErroApi` conforme a ARQUITETURA (`ErroApi.problema` tipado com o `ProblemaResponse` gerado).
+- **Fazer**: conforme ADR-003/ADR-004; entrada `../backend/openapi/openapi.json` (somente leitura). `requisicaoApi` e `ErroApi` conforme a ARQUITETURA (`ErroApi.problema` tipado com o `ProblemaResponse` gerado). `override.fetch.includeHttpResponseReturnType: false` (funções/hooks devolvem o corpo: `obterSaude(): Promise<SaudeResponse>`); `cliente-api.ts` exporta `ErrorType<_ErrosDoContrato> = ErroApi | Error` (usado pelo orval como `TError`). `"allowScripts": { "esbuild": false }` no `package.json` (ADR-001).
 - **Pronto**:
   - `npm run generate:api` → `src/api/generated/` com `useObterSaude` e `getObterSaudeQueryKey` (`grep -r "useObterSaude" src/api/generated` encontra) e os tipos `SaudeResponse`, `StatusComponente`, `ProblemaResponse`, `CodigoErro`.
   - Rodar `npm run generate:api` de novo → `git status --porcelain src/api/generated` sem alterações (após o commit) / conteúdo idêntico (antes do commit).

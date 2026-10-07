@@ -119,8 +119,9 @@ frontend/
 
 Regras:
 - Toda chamada à API passa por hooks/funções gerados em `src/api/generated` + TanStack Query; query keys vêm das funções geradas (`getObterSaudeQueryKey()`), nunca escritas à mão.
-- `requisicaoApi` (mutator): usa a URL relativa do contrato (`/api/...`), envia/recebe JSON, e para status não-2xx lança `ErroApi { status, problema?: ProblemaResponse, corpo?: unknown }` — `problema` preenchido quando o `Content-Type` é `application/problem+json`. Erros de rede propagam como estão.
-- Defaults do `QueryClient` (`criarQueryClient`): `staleTime` 30 s; `retry` até 1 vez apenas para erro de rede/5xx (nunca para 4xx); mutations sem retry.
+- `requisicaoApi` (mutator): usa a URL relativa do contrato (`/api/...`), envia/recebe JSON e devolve o **corpo** tipado (ADR-003). Para status não-2xx lança `ErroApi { status, problema?: ProblemaResponse, corpo?: unknown }` — `problema` preenchido quando o `Content-Type` é `application/problem+json`; `corpo` continua `unknown` (pode ser, por exemplo, o HTML de um 502 do nginx). Erros de rede propagam como estão (`TypeError` do `fetch`). Uma resposta 2xx com `Content-Type` JSON e corpo inválido lança `SyntaxError` (do parse), que pela regra de retry **não** é repetido — esse erro chega ao componente, que o trata no estado de erro como qualquer outro.
+- `cliente-api.ts` também exporta `export type ErrorType<_ErrosDoContrato> = ErroApi | Error`, que o orval usa como `TError` dos hooks gerados: o tipo reflete o erro real em tempo de execução (`ErroApi` para não-2xx, `Error`/`TypeError` para falha de rede). O nome `ErrorType` é imposto pelo orval (exceção do ADR-013).
+- Defaults do `QueryClient` (`criarQueryClient`): `staleTime` 30 s; `retry` até 1 vez **somente** para `ErroApi` com status 5xx e para `TypeError` (falha de rede); qualquer outro erro (4xx, erro de programação etc.) não é repetido; mutations sem retry.
 - Nomes de arquivo: componentes em PascalCase (`StatusDoSistema.tsx`); demais módulos em kebab-case (`cliente-api.ts`), sempre em português.
 - Testes colocados ao lado do código (`*.test.tsx`, descrições em português), com `renderizarComProvedores`; rede simulada com `vi.spyOn(globalThis, 'fetch')` e corpos tipados com os tipos gerados (`satisfies SaudeResponse`). MSW fica para marco futuro (ADR-001).
 - React Hook Form + Zod entram no primeiro marco com formulário (não são instalados no Marco 0).
@@ -160,11 +161,11 @@ Todas as respostas de erro usam **RFC 9457 (Problem Details)**, `Content-Type: a
 
 | Campo | Tipo | Obrigatório | Descrição |
 |---|---|---|---|
-| `type` | string (URI) | sim | Sempre `about:blank` (fixado pela `FabricaDeProblemas`; no Spring 7 o `ProblemDetail` não tem mais `type` padrão). A semântica fina vem de `codigo`. |
+| `type` | string (`format: uri-reference`) | sim | Sempre `about:blank` (fixado pela `FabricaDeProblemas`; no Spring 7 o `ProblemDetail` não tem mais `type` padrão). A semântica fina vem de `codigo`. |
 | `title` | string | sim | Título curto em pt-BR, fixo por `codigo` (tabela abaixo). O RFC permite título localizado com `about:blank`. |
 | `status` | integer | sim | Código HTTP **real** da resposta (pode diferir do status usual do `codigo` — ver regra de mapeamento). |
 | `detail` | string | sim | Mensagem em pt-BR, segura para exibir ao usuário; sempre presente (específica do caso ou o detalhe padrão do código). Nunca contém stack trace, SQL ou nome de classe. |
-| `instance` | string | não | Caminho da requisição (omitido se o caminho não formar uma URI válida). |
+| `instance` | string (`format: uri-reference`) | não | Caminho da requisição (omitido se o caminho não formar uma URI válida). `type` e `instance` são "URI reference" na RFC 9457, por isso o schema usa `uri-reference` (e não `uri`, que exigiria URI absoluta); ajustado na T6. |
 | `codigo` | `CodigoErro` (enum) | sim | Código estável, para o frontend decidir o tratamento. |
 | `ocorridoEm` | string (date-time, UTC) | sim | Momento do erro, com precisão de milissegundos. |
 | `erros` | `ErroDeCampo[]` | não | Só em `ERRO_VALIDACAO`: `{ campo: string, mensagem: string }` (ambos obrigatórios), **ordenados por `campo` e depois por `mensagem`** (saída determinística). `campo` = caminho do campo inválido (ex.: `nome`, `itens[0].quantidade`); `requisicao` para restrições de classe (validação do objeto inteiro — nunca o nome da classe Java); `parametros` para restrições entre parâmetros de método. |
@@ -225,6 +226,7 @@ Schemas no OpenAPI: `ProblemaResponse`, `ErroDeCampo` e o enum `CodigoErro` (rec
 | Testes frontend | Vitest 5.0.3, @testing-library/react 16.3, @testing-library/dom 10.4, @testing-library/jest-dom 7.0, @testing-library/user-event 14.6, jsdom 30 | |
 | Playwright | @playwright/test 1.63.0 | |
 | Formulários (a partir do 1º marco com formulário) | react-hook-form 7.89, zod 4.6, @hookform/resolvers 5.9 | Não instalados no Marco 0. |
+| Scripts de instalação npm | `"allowScripts": { "esbuild": false }` no `frontend/package.json` | Política explícita: o `postinstall` do esbuild é desnecessário — o binário vem pelo pacote opcional `@esbuild/<plataforma>` (comprovado com `--ignore-scripts`; o npm 12 já bloqueia scripts por padrão). Novos pacotes com script de instalação entram na lista só com justificativa. |
 | Imagens Docker | `eclipse-temurin:21-jdk` (build), `eclipse-temurin:21-jre-alpine` (runtime), `node:24-alpine` (build), `nginxinc/nginx-unprivileged:1.30-alpine` (runtime) | |
 | GitHub Actions | `actions/checkout@v7`, `actions/setup-java@v6`, `actions/setup-node@v7`, `actions/upload-artifact@v7` | |
 
@@ -244,9 +246,9 @@ Schemas no OpenAPI: `ProblemaResponse`, `ErroDeCampo` e o enum `CodigoErro` (rec
 
 **Contexto.** O cliente TypeScript tem de ser gerado do OpenAPI. Candidatos: orval e openapi-typescript.
 
-**Decisão.** orval 8.40.0 com `client: 'react-query'`, `httpClient: 'fetch'`, `mode: 'tags-split'`, `clean: true`, saída em `src/api/generated/` (`endpoints/` e `model/`) e `override.mutator` apontando para `src/lib/cliente-api.ts` (`requisicaoApi`). Sem geração de mocks no Marco 0.
+**Decisão.** orval 8.40.0 com `client: 'react-query'`, `httpClient: 'fetch'`, `mode: 'tags-split'`, `clean: true`, saída em `src/api/generated/` (`endpoints/` e `model/`) e `override.mutator` apontando para `src/lib/cliente-api.ts` (`requisicaoApi`). **`override.fetch.includeHttpResponseReturnType: false`**: funções e hooks devolvem o **corpo** tipado (ex.: `obterSaude(): Promise<SaudeResponse>`), sem o envelope `{ data, status, headers }`; status de erro chega pelo `ErroApi`. Tipo de erro dos hooks: `ErrorType` exportado pelo mutator (`ErroApi | Error`). Sem geração de mocks no Marco 0.
 
-**Consequências.** Hooks TanStack Query e query keys gerados — nada de tipos ou chaves escritos à mão. Os nomes gerados seguem o `operationId` em português com os prefixos do orval (`useObterSaude`, `getObterSaudeQueryKey`). openapi-typescript foi descartado também por exigir `typescript ^5` como peer (conflita com o TS 6.0 do projeto). A forma de tratar erros fica concentrada no mutator.
+**Consequências.** Hooks TanStack Query e query keys gerados — nada de tipos ou chaves escritos à mão. Os nomes gerados seguem o `operationId` em português com os prefixos do orval (`useObterSaude`, `getObterSaudeQueryKey`). openapi-typescript foi descartado também por exigir `typescript ^5` como peer (conflita com o TS 6.0 do projeto). A forma de tratar erros fica concentrada no mutator. Sem o envelope, status e cabeçalhos de **sucesso** não ficam acessíveis: se um endpoint futuro precisar deles (ex.: `Location` em um 201, `ETag`), a forma de expô-los é decidida em ADR nessa hora.
 
 ### ADR-004 — Snapshot do OpenAPI versionado e cliente gerado versionado
 
@@ -362,7 +364,7 @@ Schemas no OpenAPI: `ProblemaResponse`, `ErroDeCampo` e o enum `CodigoErro` (rec
    - arquivos e nomes impostos pelas ferramentas: `application.yml`, `pom.xml`, `package.json`, `Dockerfile`, `docker-compose.yml`, `nginx.conf`, `vite.config.ts`, `orval.config.ts`, `playwright.config.ts`, `.oxlintrc.json`, `index.html`, `main.tsx`, prefixo `V<n>__` do Flyway, sufixos de teste `*Test`/`*IT` (padrões do Surefire/Failsafe), `*.test.tsx` (Vitest) e `*.spec.ts` (Playwright);
    - campos padrão do RFC 9457: `type`, `title`, `status`, `detail`, `instance`;
    - **vocabulário de camada do Spring**: sufixos `Controller`, `Service`, `Repository`, `Dto` (e as variantes de DTO `Request`/`Response`), e os pacotes de camada correspondentes;
-   - nomes gerados por ferramentas a partir dos nossos nomes (orval: `use` + operationId, `get…QueryKey`);
+   - nomes gerados por ferramentas a partir dos nossos nomes (orval: `use` + operationId, `get…QueryKey`) e nomes que a ferramenta exige de nós (orval: o tipo `ErrorType` exportado pelo mutator);
    - nomes próprios, siglas e jargão consagrado: Kontra, OpenAPI, API, JSON, URL, backend, frontend, e2e, status.
 3. **Decisões do arquiteto nos pontos não cobertos pelo usuário** *(confirmado pelo usuário em 2026-10-06)*:
    - **Pacotes técnicos do backend**: `config` e `domain` ficam em inglês, como os demais pacotes de camada (`controller`, `service`, `repository`, `dto`); classes em `config/` usam o sufixo `Config` (`SegurancaConfig`, `OpenApiConfig`, `TestcontainersConfig`). Pacotes que não são camada vão para o português: `comum/erro`, `suporte` (testes), e os módulos (`saude`, `contrato`).

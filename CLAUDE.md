@@ -97,6 +97,8 @@ URLs no compose: frontend `http://localhost:3000`, backend `http://localhost:808
 
 Testcontainers requer o Docker em execução.
 
+Acentos no console: o `backend/.mvn/jvm.config` força a saída do Maven/JVM em UTF-8. O Git Bash já exibe corretamente; no PowerShell/cmd rode `chcp 65001` (ou `[Console]::OutputEncoding = [Text.Encoding]::UTF8`) antes do `.\mvnw.cmd`, senão os acentos saem trocados (code page 850).
+
 ## Ambiente de desenvolvimento
 
 Windows 10, Java 21 (Temurin), Node 24, Docker 29, Git 2.55. Shells disponíveis: PowerShell e Git Bash.
