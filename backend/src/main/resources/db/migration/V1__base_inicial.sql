@@ -1,0 +1,3 @@
+-- Base inicial do Marco 0.
+-- Não cria objetos: existe para validar o pipeline de migrações do Flyway
+-- (após a subida, flyway_schema_history registra a versão 1 com sucesso).

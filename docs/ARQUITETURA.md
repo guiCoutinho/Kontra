@@ -27,9 +27,11 @@ Dev local:  Navegador ──► Vite :5173 ──(proxy /api)──► backend :
 
 | Serviço | Dev local | docker compose (host → container) |
 |---|---|---|
-| Frontend | `5173` (Vite) | `${PORTA_FRONTEND:-3000}` → `8080` (nginx não root) |
-| Backend | `8080` | `${PORTA_BACKEND:-8080}` → `8080` |
-| PostgreSQL | `5432` (serviço `banco` do compose) | `${PORTA_POSTGRES:-5432}` → `5432` |
+| Frontend | `5173` (Vite) | `127.0.0.1:${PORTA_FRONTEND:-3000}` → `8080` (nginx não root) |
+| Backend | `8080` | `127.0.0.1:${PORTA_BACKEND:-8080}` → `8080` |
+| PostgreSQL | `5432` (serviço `banco` do compose) | `127.0.0.1:${PORTA_POSTGRES:-5432}` → `5432` |
+
+No Marco 0, **todas** as portas do compose (inclusive a do frontend) são publicadas só no loopback (`127.0.0.1`): ficam acessíveis em `localhost`, mas não pela rede local. Expor na rede é decisão de um marco futuro (com autenticação). O compose não usa `restart` policy no Marco 0.
 
 Swagger UI fica no backend (`http://localhost:8080/swagger-ui.html`); o nginx do frontend não repassa `/swagger-ui` nem `/v3/api-docs`.
 
@@ -55,7 +57,8 @@ backend/
     │   ├── comum/erro/                      # TratadorGlobalDeExcecoes, ExcecaoApi, CodigoErro,
     │   │                                    # ProblemaResponse, ErroDeCampo (schemas do contrato),
     │   │                                    # FabricaDeProblemas, TratadorNaoAutenticado (401),
-    │   │                                    # TratadorAcessoNegado (403)
+    │   │                                    # TratadorAcessoNegado (403), ErroPadraoController (/error),
+    │   │                                    # TratadorRequisicaoRejeitada (firewall do Security)
     │   ├── saude/
     │   │   ├── controller/SaudeController
     │   │   ├── service/SaudeService
@@ -67,6 +70,7 @@ backend/
     │   └── db/migration/V<n>__<descricao>.sql
     └── test/java/br/com/kontra/
         ├── suporte/TestcontainersConfig.java   # PostgreSQL 18 via @ServiceConnection, reutilizado por todos os *IT
+        ├── suporte/TesteDeIntegracao.java      # meta-anotação obrigatória de todo *IT (ADR-011)
         ├── config/SnapshotOpenApiIT.java
         └── <espelha o pacote testado>/  *Test.java (unit/slice)  *IT.java (integração)
 ```
@@ -74,10 +78,11 @@ backend/
 Regras:
 - Camadas: `controller` (HTTP, validação de entrada, mapeamento DTO) → `service` (regra de negócio, `@Transactional`) → `repository` (Spring Data). Controllers nunca acessam repositories.
 - `domain/` contém entidades JPA (nome em português, sem sufixo: `Contrato`); elas nunca saem do service — controllers recebem/devolvem só DTOs (`record`s em `dto/`, com sufixo `Request` para entrada e `Response` para saída).
-- Exceções de negócio estendem `comum.erro.ExcecaoApi` (carrega `HttpStatus` + `CodigoErro` + mensagem em pt-BR); nunca se lança `ResponseStatusException` diretamente.
+- Exceções de negócio estendem `comum.erro.ExcecaoApi` (carrega `HttpStatus` + `CodigoErro` + mensagem em pt-BR); só aceita status de erro (4xx/5xx) — outro status é rejeitado na construção. Nunca se lança `ResponseStatusException` diretamente.
+- **DTOs do contrato e Jackson**: o springdoc gera os schemas com o Jackson 2 do swagger-core, que **não** enxerga as anotações de databind do Jackson 3 (`tools.jackson.databind.annotation.*`, ex.: `@JsonSerialize`, `@JsonNaming`) nem a configuração `spring.jackson.*`. Nos DTOs do contrato, usar só `com.fasterxml.jackson.annotation.*` (compartilhadas pelos dois, ex.: `@JsonProperty`, `@JsonInclude`) e não configurar nada em `spring.jackson.*` que mude o formato do JSON (nomes, inclusão, datas). Um teste compara o JSON real com o schema publicado (T6 do Marco 0).
 - Configuração lida de `application.yml` com placeholders de variáveis de ambiente (`${BANCO_URL:...}`); nada de perfis por ambiente no Marco 0.
 - `spring.jpa.open-in-view=false`, `spring.jpa.hibernate.ddl-auto=validate`, Hikari `connection-timeout` de 5 s (falha rápida; a verificação de saúde responde em poucos segundos com o banco fora).
-- Testes: `*Test` = unitários/slice, sem Docker (Surefire, `./mvnw test`); `*IT` = integração com contexto completo + Testcontainers (Failsafe, `./mvnw verify`). Métodos de teste em português, no formato `deve<Resultado>Quando<Condicao>()`. Ver ADR-011.
+- Testes: `*Test` = unitários/slice, sem Docker (Surefire, `./mvnw test`); `*IT` = integração com contexto completo + Testcontainers (Failsafe, `./mvnw verify`), sempre anotados com `@TesteDeIntegracao`. Métodos de teste em português, no formato `deve<Resultado>Quando<Condicao>()`. Ver ADR-011.
 
 ## Frontend — estrutura de pastas
 
@@ -114,8 +119,9 @@ frontend/
 
 Regras:
 - Toda chamada à API passa por hooks/funções gerados em `src/api/generated` + TanStack Query; query keys vêm das funções geradas (`getObterSaudeQueryKey()`), nunca escritas à mão.
-- `requisicaoApi` (mutator): usa a URL relativa do contrato (`/api/...`), envia/recebe JSON, e para status não-2xx lança `ErroApi { status, problema?: ProblemaResponse, corpo?: unknown }` — `problema` preenchido quando o `Content-Type` é `application/problem+json`. Erros de rede propagam como estão.
-- Defaults do `QueryClient` (`criarQueryClient`): `staleTime` 30 s; `retry` até 1 vez apenas para erro de rede/5xx (nunca para 4xx); mutations sem retry.
+- `requisicaoApi` (mutator): usa a URL relativa do contrato (`/api/...`), envia/recebe JSON e devolve o **corpo** tipado (ADR-003). Para status não-2xx lança `ErroApi { status, problema?: ProblemaResponse, corpo?: unknown }` — `problema` preenchido quando o `Content-Type` é `application/problem+json`; `corpo` continua `unknown` (pode ser, por exemplo, o HTML de um 502 do nginx). Erros de rede propagam como estão (`TypeError` do `fetch`). Uma resposta 2xx com `Content-Type` JSON e corpo inválido lança `SyntaxError` (do parse), que pela regra de retry **não** é repetido — esse erro chega ao componente, que o trata no estado de erro como qualquer outro.
+- `cliente-api.ts` também exporta `export type ErrorType<_ErrosDoContrato> = ErroApi | Error`, que o orval usa como `TError` dos hooks gerados: o tipo reflete o erro real em tempo de execução (`ErroApi` para não-2xx, `Error`/`TypeError` para falha de rede). O nome `ErrorType` é imposto pelo orval (exceção do ADR-013).
+- Defaults do `QueryClient` (`criarQueryClient`): `staleTime` 30 s; `retry` até 1 vez **somente** para `ErroApi` com status 5xx e para `TypeError` (falha de rede); qualquer outro erro (4xx, erro de programação etc.) não é repetido; mutations sem retry.
 - Nomes de arquivo: componentes em PascalCase (`StatusDoSistema.tsx`); demais módulos em kebab-case (`cliente-api.ts`), sempre em português.
 - Testes colocados ao lado do código (`*.test.tsx`, descrições em português), com `renderizarComProvedores`; rede simulada com `vi.spyOn(globalThis, 'fetch')` e corpos tipados com os tipos gerados (`satisfies SaudeResponse`). MSW fica para marco futuro (ADR-001).
 - React Hook Form + Zod entram no primeiro marco com formulário (não são instalados no Marco 0).
@@ -146,7 +152,7 @@ Todas as respostas de erro usam **RFC 9457 (Problem Details)**, `Content-Type: a
   "detail": "A requisição contém campos inválidos.",
   "instance": "/api/exemplo",
   "codigo": "ERRO_VALIDACAO",
-  "ocorridoEm": "2026-10-06T21:00:00Z",
+  "ocorridoEm": "2026-10-06T21:00:00.123Z",
   "erros": [
     { "campo": "nome", "mensagem": "não deve estar em branco" }
   ]
@@ -155,34 +161,70 @@ Todas as respostas de erro usam **RFC 9457 (Problem Details)**, `Content-Type: a
 
 | Campo | Tipo | Obrigatório | Descrição |
 |---|---|---|---|
-| `type` | string (URI) | sim | Sempre `about:blank` no Marco 0 (a semântica fina vem de `codigo`). |
+| `type` | string (`format: uri-reference`) | sim | Sempre `about:blank` (fixado pela `FabricaDeProblemas`; no Spring 7 o `ProblemDetail` não tem mais `type` padrão). A semântica fina vem de `codigo`. |
 | `title` | string | sim | Título curto em pt-BR, fixo por `codigo` (tabela abaixo). O RFC permite título localizado com `about:blank`. |
-| `status` | integer | sim | Código HTTP. |
-| `detail` | string | não | Mensagem em pt-BR, segura para exibir ao usuário. Nunca contém stack trace, SQL ou nome de classe. |
-| `instance` | string | não | Caminho da requisição. |
+| `status` | integer | sim | Código HTTP **real** da resposta (pode diferir do status usual do `codigo` — ver regra de mapeamento). |
+| `detail` | string | sim | Mensagem em pt-BR, segura para exibir ao usuário; sempre presente (específica do caso ou o detalhe padrão do código). Nunca contém stack trace, SQL ou nome de classe. |
+| `instance` | string (`format: uri-reference`) | não | Caminho da requisição (omitido se o caminho não formar uma URI válida). `type` e `instance` são "URI reference" na RFC 9457, por isso o schema usa `uri-reference` (e não `uri`, que exigiria URI absoluta); ajustado na T6. |
 | `codigo` | `CodigoErro` (enum) | sim | Código estável, para o frontend decidir o tratamento. |
-| `ocorridoEm` | string (date-time, UTC) | sim | Momento do erro. |
-| `erros` | `ErroDeCampo[]` | não | Só em `ERRO_VALIDACAO`: `{ campo: string, mensagem: string }` (ambos obrigatórios). |
+| `ocorridoEm` | string (date-time, UTC) | sim | Momento do erro, com precisão de milissegundos. |
+| `erros` | `ErroDeCampo[]` | não | Só em `ERRO_VALIDACAO`: `{ campo: string, mensagem: string }` (ambos obrigatórios), **ordenados por `campo` e depois por `mensagem`** (saída determinística). `campo` = caminho do campo inválido (ex.: `nome`, `itens[0].quantidade`); `requisicao` para restrições de classe (validação do objeto inteiro — nunca o nome da classe Java); `parametros` para restrições entre parâmetros de método. Falha de conversão de tipo no binding (`FieldError.isBindingFailure()`, ex.: texto num campo numérico) sai com `mensagem` fixa `valor inválido`, sem detalhe técnico (nome de tipo, exceção ou valor). |
 
-Schemas no OpenAPI: `ProblemaResponse`, `ErroDeCampo` e o enum `CodigoErro` (records/enum em `comum/erro`, usados nas anotações `@ApiResponse`). Um teste de integração garante que o JSON real de erro bate com esses campos.
+Schemas no OpenAPI: `ProblemaResponse`, `ErroDeCampo` e o enum `CodigoErro` (records/enum em `comum/erro`, usados nas anotações `@ApiResponse`), com `requiredMode = REQUIRED` nos campos marcados como obrigatórios acima e `enumAsRef = true` no `CodigoErro`. Um teste de integração garante que o JSON real de erro bate com esses campos. O `Content-Type` é sempre `application/problem+json`, mesmo que o cliente envie `Accept: application/json`.
 
 `CodigoErro` (Marco 0):
 
-| `codigo` | HTTP | `title` | Quando |
+| `codigo` | HTTP usual | `title` | Quando |
 |---|---|---|---|
 | `ERRO_VALIDACAO` | 400 | Dados inválidos | Bean Validation em corpo/parâmetros (`MethodArgumentNotValidException`, `HandlerMethodValidationException`, `ConstraintViolationException`). |
-| `REQUISICAO_MALFORMADA` | 400 | Requisição malformada | JSON ilegível, tipo de parâmetro inválido, parâmetro obrigatório ausente. |
+| `REQUISICAO_MALFORMADA` | 400 | Requisição malformada | Qualquer outro 400 do framework: JSON ilegível, tipo de parâmetro inválido, parâmetro/parte/cabeçalho obrigatório ausente. |
 | `NAO_AUTENTICADO` | 401 | Não autenticado | Rota não pública sem autenticação (no Marco 0: toda rota não pública, inclusive inexistente). |
 | `ACESSO_NEGADO` | 403 | Acesso negado | Autenticado sem permissão (sem uso real no Marco 0). |
 | `NAO_ENCONTRADO` | 404 | Recurso não encontrado | Recurso/rota inexistente em caminho público. |
 | `METODO_NAO_PERMITIDO` | 405 | Método não permitido | Método HTTP não suportado. |
-| `TIPO_DE_MIDIA_NAO_SUPORTADO` | 415 | Tipo de mídia não suportado | `Content-Type` não suportado. |
 | `CONFLITO` | 409 | Conflito | Reservado para regras de negócio/unicidade (a partir do Marco 1). |
-| `ERRO_INTERNO` | 500 | Erro interno | Qualquer exceção não tratada. `detail` genérico; stack trace só no log. |
+| `TIPO_DE_MIDIA_NAO_SUPORTADO` | 415 | Tipo de mídia não suportado | `Content-Type` enviado não suportado. |
+| `ERRO_REQUISICAO` | 400 (usual); na prática o 4xx real | Requisição não atendida | **Qualquer 4xx sem código próprio**, com o status HTTP real preservado — ex.: 406 (formato de resposta não aceitável), 413 (conteúdo grande demais), 414, 431. |
+| `ERRO_INTERNO` | 500 (ou o 5xx real) | Erro interno | Qualquer exceção não tratada e qualquer 5xx do framework. `detail` genérico; stack trace só no log. |
 
-`TratadorGlobalDeExcecoes` (`@RestControllerAdvice`, estende `ResponseEntityExceptionHandler`): sobrescreve a criação da resposta para todas as exceções do Spring MVC passarem pela `FabricaDeProblemas`; trata `ExcecaoApi`, as exceções de validação e `Exception` (500). Os tratadores devolvem `ResponseEntity` (sem `@ResponseStatus`), para o springdoc não injetar respostas genéricas em todas as operações — as respostas de erro de cada operação são declaradas explicitamente.
+**Regra de mapeamento status ↔ código** (`CodigoErro.deStatus`, para exceções do framework sem tratamento específico): 400 → `REQUISICAO_MALFORMADA`; 401, 403, 404, 405, 409, 415 → o código da tabela; **qualquer outro 4xx → `ERRO_REQUISICAO`**; qualquer 5xx → `ERRO_INTERNO`. O `status` da resposta é sempre o real. Códigos específicos novos (ex.: `ARQUIVO_MUITO_GRANDE` para 413) só entram quando uma funcionalidade tornar o caso esperado para o usuário (ex.: upload de arquivos) — é uma mudança de contrato, registrada no plano do marco. O frontend trata `codigo` com um caso padrão (exibir `detail`) para os códigos genéricos.
 
-Lacuna conhecida: erros lançados em filtros fora do Spring Security caem no `/error` do Boot e usam o formato padrão dele. Aceito no Marco 0.
+`TratadorGlobalDeExcecoes` (`@RestControllerAdvice`, estende `ResponseEntityExceptionHandler`): sobrescreve a criação da resposta para todas as exceções do Spring MVC passarem pela `FabricaDeProblemas` (mantendo status e cabeçalhos, ex.: `Allow`); trata `ExcecaoApi`, as exceções de validação e `Exception` (500); repassa `AccessDeniedException`/`AuthenticationException` ao Spring Security. Os tratadores devolvem `ResponseEntity` (sem `@ResponseStatus`), para o springdoc não injetar respostas genéricas em todas as operações — as respostas de erro de cada operação são declaradas explicitamente.
+
+**Erros fora do Spring MVC** também seguem o contrato:
+- **`/error`**: o `ErroPadraoController` (`comum/erro`, implementa `ErrorController`) substitui o do Boot e responde pela `FabricaDeProblemas`: status lido de `ERROR_STATUS_CODE` (ausente → 404), `codigo` por `CodigoErro.deStatus`, `instance` = URI original da requisição (`ERROR_REQUEST_URI`). Caminho em `spring.web.error.path` (padrão `/error`); página Whitelabel desligada com `spring.web.error.whitelabel.enabled: false`. **No Spring Boot 4 a família `server.error.*` está depreciada e não é lida — usar sempre `spring.web.error.*`.** O `/error` fica fora do OpenAPI (ver T5 do Marco 0).
+- **Firewall do Spring Security**: o `TratadorRequisicaoRejeitada` (`comum/erro`, implementa o `RequestRejectedHandler` do Security 7) escreve as rejeições do `StrictHttpFirewall` direto pela `FabricaDeProblemas`: 400 `REQUISICAO_MALFORMADA`, com `detail` específico. Casos do firewall: `;` no caminho, `//`, `%2e%2e` (travessia codificada), dupla codificação (`%252e`) e método HTTP desconhecido.
+- **Cabeçalhos de segurança**: as respostas do firewall e do `/error` levam `X-Content-Type-Options: nosniff` e `Cache-Control: no-store`, escritos pela própria `FabricaDeProblemas`/`ErroPadraoController` — o `HeaderWriterFilter` do Spring Security não atua nesses caminhos.
+- **Métodos HTTP incomuns**: direto no backend (`:8080`), `TRACE` é barrado pelo próprio Tomcat e chega pelo `/error` como 405 `METODO_NAO_PERMITIDO`; pela origem do frontend (nginx, `:3000`), o próprio nginx responde `TRACE` com 405 em HTML, sem passar pelo backend — mesma lacuna dos erros gerados pelo nginx (ver "Pendências de segurança"); métodos desconhecidos (ex.: `FOO`) são rejeitados pelo firewall → 400 `REQUISICAO_MALFORMADA`.
+- **Única lacuna aceita**: o que o próprio Tomcat recusa **antes** do Spring Security e do servlet sai como a página HTML 400 do Tomcat, sem detalhe interno (não depende da aplicação). Casos medidos: barra codificada (`/api/a%2Fb`), `%` solto, URI acima de 8 KB e cabeçalho acima de 8 KB. Aceito no Marco 0.
+
+## Pendências de segurança
+
+Resultado da auditoria de segurança do Marco 0: 0 crítica, 0 alta, 3 média, 7 baixa. Os itens abaixo são **obrigatórios no momento indicado** — o planejamento do marco correspondente deve incluí-los como tarefas.
+
+**Antes do Marco 1 / do primeiro dado real**
+- Papel de banco próprio da aplicação, sem superuser: script em `docker-entrypoint-initdb.d` criando o papel com `NOSUPERUSER NOCREATEDB NOCREATEROLE`, dono só do esquema da aplicação. Se DDL e DML forem separados, o Flyway usa credencial própria (papel de migração) e a aplicação, um papel só de DML.
+
+**Antes de qualquer ambiente não-dev ou de expor a aplicação**
+- Remover os valores padrão de credenciais do `application.yml` (`BANCO_*` sem fallback): sem variável, a aplicação falha na partida.
+- Swagger UI/OpenAPI desligados por padrão; `true` só em dev.
+- Hardening do compose: `security_opt: no-new-privileges`, `cap_drop: [ALL]` (readicionando só o necessário), `read_only: true` + `tmpfs` para os diretórios graváveis, limites de memória e de PIDs; imagens fixadas por digest.
+- Verificação de saúde: cache curto da resposta de `/api/saude` e `limit_req` no nginx (evita que a rota pública vire amplificador de carga no banco).
+- Cabeçalhos no nginx:
+  - CSP da SPA: `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'` (Emotion/MUI injeta estilos; alternativa: nonce) `; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'`;
+  - CSP das respostas da API: `default-src 'none'; frame-ancestors 'none'`;
+  - `Permissions-Policy` restritiva e `Cross-Origin-Opener-Policy: same-origin`;
+  - HSTS assim que houver TLS.
+- Erros gerados pelo próprio nginx em `/api/` (413, 502, 504) sem cabeçalhos que revelem versão/servidor.
+- Logs do nginx: retenção definida e IP mascarado (LGPD).
+- Imagem de runtime com `apk upgrade` no build (ex.: correção de `libpng`), além da atualização pelo Dependabot.
+
+**Marco de autenticação** (complementa as pendências do ADR-007)
+- Preferir **sessão em cookie** `HttpOnly` + `Secure` + `SameSite` com CSRF habilitado (a SPA está na mesma origem — ADR-005) a JWT guardado em `localStorage`.
+- Senhas com `DelegatingPasswordEncoder` (bcrypt) ou Argon2.
+- Login com rate limit e mensagem uniforme (não revela se o usuário existe).
+- Checagem de dono do recurso (IDOR) em toda operação sobre recurso de usuário, com teste automatizado.
+- `@EnableMethodSecurity` para autorização por método.
 
 ## Decisões técnicas (ADRs)
 
@@ -196,7 +238,9 @@ Lacuna conhecida: erros lançados em filtros fora do Spring Security caem no `/e
 |---|---|---|
 | Java | 21 (Temurin) | LTS instalada no ambiente; Boot 4.1 suporta 17–27. Migrar para 25 LTS é decisão futura. |
 | Spring Boot | **4.1.1** | Padrão atual do Initializr (4.2.0 está em M2). Starters do Boot 4: `spring-boot-starter-webmvc`, `-data-jpa`, `-validation`, `-security`, `-flyway` (+ `flyway-database-postgresql`) e os `*-test` correspondentes. |
-| Gerenciadas pelo Boot 4.1.1 | Spring Framework 7.0.9, Spring Security 7.1.1, Hibernate 7.4.5, Jackson 3.1.5, Flyway 12.4.0, PostgreSQL JDBC 42.7.13, Testcontainers 2.0.5, JUnit Jupiter 6.0.3, Mockito 5.23.0 | Não sobrescrever versões gerenciadas (Flyway 13.x existe, mas fica a do Boot). |
+| Gerenciadas pelo Boot 4.1.1 | Spring Framework 7.0.9, Spring Security 7.1.1, Hibernate 7.4.5, Jackson 3.1.5, Flyway 12.4.0, PostgreSQL JDBC 42.7.13, Testcontainers 2.0.5, JUnit Jupiter 6.0.3, Mockito 5.23.0 | Não sobrescrever versões gerenciadas (Flyway 13.x existe, mas fica a do Boot) — **exceto patches de segurança** (linha abaixo). |
+| Patches de segurança (sobrescrevem o Boot) | `tomcat.version` **11.0.26**, `jackson-bom` **3.1.7**, `jackson-2-bom` **2.21.7** (propriedades no `pom.xml`) | Única exceção à regra acima: CVEs no Tomcat 11.0.24 e no Jackson 3.1.5/2.21.5 gerenciados pelo Boot 4.1.1, sem Boot 4.1.2 disponível (auditoria de segurança do Marco 0). **Remover cada sobrescrita quando o Boot passar a gerenciar versão ≥ a fixada.** Só patch/minor compatível da mesma linha; nunca major. **Todo PR de bump do `spring-boot-starter-parent` deve ser revisado contra estas sobrescritas**: se o novo Boot já gerencia versão ≥, a sobrescrita sai no mesmo PR; se gerencia versão menor, ela fica — sem isso, há risco de downgrade silencioso ou de sobrescrita esquecida. |
+| Atualização de dependências | Dependabot (`.github/dependabot.yml`: `maven`, `npm` — frontend e e2e —, `docker`, `docker-compose`, `github-actions`) | Acompanha CVEs e novas versões, inclusive o momento de remover as sobrescritas acima. Cada PR do Dependabot segue o fluxo normal (revisor + CI). O `dependabot.yml` **ignora** as atualizações que contrariam decisões deste ADR — major do PostgreSQL (19), troca de LTS do Java/Node, TypeScript 7, `@types/node` fora da linha 24 — e o minor do `nginx-unprivileged` (que mudaria para a linha mainline). Mudar qualquer uma dessas linhas é decisão de ADR, não PR automático. O orval tem regra própria (ADR-003). |
 | springdoc-openapi | **3.1.1** (`springdoc-openapi-starter-webmvc-ui`) | Linha 3.x é a do Boot 4; a 3.1.1 é compilada contra Spring Boot 4.1.0 (parent do pom) — compatível com 4.1.1. |
 | Testcontainers | 2.0.5 (via Boot) | Artefatos renomeados no 2.x: `testcontainers-postgresql`, `testcontainers-junit-jupiter`. Compatível com Docker Engine 29. |
 | PostgreSQL | **18** (`postgres:18-alpine`) | Mesma imagem no compose e no Testcontainers. |
@@ -212,8 +256,9 @@ Lacuna conhecida: erros lançados em filtros fora do Spring Security caem no `/e
 | Testes frontend | Vitest 5.0.3, @testing-library/react 16.3, @testing-library/dom 10.4, @testing-library/jest-dom 7.0, @testing-library/user-event 14.6, jsdom 30 | |
 | Playwright | @playwright/test 1.63.0 | |
 | Formulários (a partir do 1º marco com formulário) | react-hook-form 7.89, zod 4.6, @hookform/resolvers 5.9 | Não instalados no Marco 0. |
+| Scripts de instalação npm | `"allowScripts": { "esbuild": false }` no `frontend/package.json` | Política explícita: o `postinstall` do esbuild é desnecessário — o binário vem pelo pacote opcional `@esbuild/<plataforma>` (comprovado com `--ignore-scripts`; o npm 12 já bloqueia scripts por padrão). Novos pacotes com script de instalação entram na lista só com justificativa. |
 | Imagens Docker | `eclipse-temurin:21-jdk` (build), `eclipse-temurin:21-jre-alpine` (runtime), `node:24-alpine` (build), `nginxinc/nginx-unprivileged:1.30-alpine` (runtime) | |
-| GitHub Actions | `actions/checkout@v7`, `actions/setup-java@v6`, `actions/setup-node@v7`, `actions/upload-artifact@v7` | |
+| GitHub Actions | `actions/checkout` v7.0.1, `actions/setup-java` v6.0.1, `actions/setup-node` v7.0.0, `actions/upload-artifact` v7.0.1, `actions/cache` v6.1.0 | Fixadas por SHA do commit no workflow (versão em comentário), por segurança da cadeia de suprimentos; o Dependabot atualiza. |
 
 **Consequências.** Majors recentes (Boot 4, Vite 8, React Router 8, MUI 9, Vitest 5) podem ter APIs diferentes da memória dos agentes: consultar a documentação oficial da versão. Se uma versão bloquear, o agente avisa e propõe fixar a major anterior; o arquiteto atualiza este ADR. O `CLAUDE.md` cita "JUnit 5": no Boot 4.1 a JUnit Jupiter é a 6.x, com a mesma API Jupiter.
 
@@ -231,9 +276,9 @@ Lacuna conhecida: erros lançados em filtros fora do Spring Security caem no `/e
 
 **Contexto.** O cliente TypeScript tem de ser gerado do OpenAPI. Candidatos: orval e openapi-typescript.
 
-**Decisão.** orval 8.40.0 com `client: 'react-query'`, `httpClient: 'fetch'`, `mode: 'tags-split'`, `clean: true`, saída em `src/api/generated/` (`endpoints/` e `model/`) e `override.mutator` apontando para `src/lib/cliente-api.ts` (`requisicaoApi`). Sem geração de mocks no Marco 0.
+**Decisão.** orval 8.40.0 com `client: 'react-query'`, `httpClient: 'fetch'`, `mode: 'tags-split'`, `clean: true`, saída em `src/api/generated/` (`endpoints/` e `model/`) e `override.mutator` apontando para `src/lib/cliente-api.ts` (`requisicaoApi`). **`override.fetch.includeHttpResponseReturnType: false`**: funções e hooks devolvem o **corpo** tipado (ex.: `obterSaude(): Promise<SaudeResponse>`), sem o envelope `{ data, status, headers }`; status de erro chega pelo `ErroApi`. Tipo de erro dos hooks: `ErrorType` exportado pelo mutator (`ErroApi | Error`). Sem geração de mocks no Marco 0.
 
-**Consequências.** Hooks TanStack Query e query keys gerados — nada de tipos ou chaves escritos à mão. Os nomes gerados seguem o `operationId` em português com os prefixos do orval (`useObterSaude`, `getObterSaudeQueryKey`). openapi-typescript foi descartado também por exigir `typescript ^5` como peer (conflita com o TS 6.0 do projeto). A forma de tratar erros fica concentrada no mutator.
+**Consequências.** Hooks TanStack Query e query keys gerados — nada de tipos ou chaves escritos à mão. Os nomes gerados seguem o `operationId` em português com os prefixos do orval (`useObterSaude`, `getObterSaudeQueryKey`). openapi-typescript foi descartado também por exigir `typescript ^5` como peer (conflita com o TS 6.0 do projeto). A forma de tratar erros fica concentrada no mutator. O orval é fixado na versão exata e **todo upgrade dele é "bump + `npm run generate:api` no mesmo PR"** (senão o CI falha no `git diff` do cliente gerado); por isso o Dependabot trata o orval fora do grupo de patches, em PR próprio, que precisa receber o cliente regenerado antes do merge. Sem o envelope, status e cabeçalhos de **sucesso** não ficam acessíveis: se um endpoint futuro precisar deles (ex.: `Location` em um 201, `ETag`), a forma de expô-los é decidida em ADR nessa hora.
 
 ### ADR-004 — Snapshot do OpenAPI versionado e cliente gerado versionado
 
@@ -241,12 +286,13 @@ Lacuna conhecida: erros lançados em filtros fora do Spring Security caem no `/e
 
 **Decisão.**
 1. **Quem gera o spec**: o backend, pelo teste `SnapshotOpenApiIT` (contexto completo + Testcontainers + MockMvc em `GET /v3/api-docs`).
-2. **Onde fica**: `backend/openapi/openapi.json`, versionado, JSON indentado com chaves ordenadas (`springdoc.writer-with-order-by-keys=true`, `springdoc.writer-with-default-pretty-printer=true`) e `servers` fixo (`/`) + `info` fixo no `OpenApiConfig` — saída determinística.
+2. **Onde fica**: `backend/openapi/openapi.json`, versionado, JSON indentado com chaves ordenadas (`springdoc.writer-with-order-by-keys=true`, `springdoc.writer-with-default-pretty-printer=true`) e `servers` fixo (`/`) + `info` fixo no `OpenApiConfig` — saída determinística. Só entram rotas sob `/api/**` (`springdoc.paths-to-match`), então `/error` e qualquer rota técnica ficam fora do contrato.
 3. **Divergência no backend**: o teste compara o spec gerado com o arquivo como árvore JSON (imune a CRLF/LF). Diferente → falha com a mensagem "rode `./mvnw verify -Dopenapi.atualizarSnapshot=true`". Com a propriedade `openapi.atualizarSnapshot=true`, o teste regrava o arquivo e passa. Toda tarefa de backend que muda o contrato commita o snapshot atualizado junto.
 4. **Quem gera o cliente**: o frontend, com `npm run generate:api` (lê `../backend/openapi/openapi.json`, só leitura). `src/api/generated/` é versionado e excluído do lint.
 5. **Divergência no frontend**: o CI roda `npm run generate:api` e `git diff --exit-code -- src/api/generated`; diferença → falha.
+6. **Proteções adicionais**: `springdoc.override-with-generic-response: false` (as respostas de erro de cada operação são só as declaradas; nada é injetado a partir do `@RestControllerAdvice`); o `SnapshotOpenApiIT` recusa regravar o arquivo quando a variável de ambiente `CI` está definida; o CI roda `git diff --exit-code -- backend/openapi/openapi.json` depois do `./mvnw -B verify` (pega `-D` indevido no workflow ou snapshot não commitado); e um teste confere que as chaves do JSON real dos DTOs batem com `properties`/`required` do schema publicado — o springdoc usa Jackson 2 e a aplicação Jackson 3 (ver "Backend — pacotes", regra "DTOs do contrato e Jackson").
 
-**Consequências.** Mudança de contrato = commit de backend (código + snapshot) seguido de commit de frontend (cliente regenerado). O build Docker do frontend não precisa do backend nem do spec. O frontend nunca edita o snapshot nem o código gerado.
+**Consequências.** Mudança de contrato = commit de backend (código + snapshot) seguido de commit de frontend (cliente regenerado). O build Docker do frontend não precisa do backend nem do spec. O frontend nunca edita o snapshot nem o código gerado. Divergência entre o JSON real e o schema publicado quebra o build do backend.
 
 ### ADR-005 — Prefixo `/api` e mesma origem (sem CORS)
 
@@ -260,9 +306,9 @@ Lacuna conhecida: erros lançados em filtros fora do Spring Security caem no `/e
 
 **Contexto.** O `CLAUDE.md` exige formato de erro padronizado e `@ControllerAdvice` global.
 
-**Decisão.** `ProblemDetail` com extensões `codigo`, `ocorridoEm`, `erros`, conforme a seção "Formato padronizado de erro". Uma única `FabricaDeProblemas` para MVC e Spring Security.
+**Decisão.** `ProblemDetail` com extensões `codigo`, `ocorridoEm`, `erros`, conforme a seção "Formato padronizado de erro". Uma única `FabricaDeProblemas` para MVC e Spring Security. Saída determinística: `type` fixo `about:blank`, `ocorridoEm` truncado em milissegundos, `erros[]` ordenado por `campo` (e depois `mensagem`), `detail` sempre presente. Mapeamento de status sem tratamento específico: 400 → `REQUISICAO_MALFORMADA`, demais 4xx sem código próprio → `ERRO_REQUISICAO` (status real preservado), 5xx → `ERRO_INTERNO` *(decidido em 2026-10-06, a partir da T4)*.
 
-**Consequências.** Padrão de mercado, suportado nativamente pelo Spring; o frontend tem `ProblemaResponse` e `CodigoErro` gerados e mapeia `erros[]` para os campos do formulário.
+**Consequências.** Padrão de mercado, suportado nativamente pelo Spring; o frontend tem `ProblemaResponse` e `CodigoErro` gerados e mapeia `erros[]` para os campos do formulário. Com o código genérico `ERRO_REQUISICAO`, nenhum 4xx incomum é rotulado com um significado falso (ex.: 413 como "malformada"), e o enum só cresce quando uma funcionalidade torna um caso esperado.
 
 ### ADR-007 — Spring Security no Marco 0: negar por padrão, sem autenticação
 
@@ -271,11 +317,17 @@ Lacuna conhecida: erros lançados em filtros fora do Spring Security caem no `/e
 **Decisão.** Um `SecurityFilterChain` (em `SegurancaConfig`) com:
 - públicas (`permitAll`): `GET /api/saude`, `/v3/api-docs/**`, `/swagger-ui.html`, `/swagger-ui/**`, `/error`;
 - demais rotas: `authenticated()` — como não há mecanismo de login, resultam em **401** `NAO_AUTENTICADO` (Problem Details) via `TratadorNaoAutenticado` (`AuthenticationEntryPoint`); 403 via `TratadorAcessoNegado` (`AccessDeniedHandler`);
-- `httpBasic`, `formLogin` e `logout` desabilitados; usuário em memória gerado pelo Boot desligado (o log não pode conter `Using generated security password`);
+- `httpBasic`, `formLogin` e `logout` desabilitados; usuário em memória gerado pelo Boot desligado (o log não pode conter `Using generated security password`) por **propriedade** — `spring.autoconfigure.exclude: org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration` no `application.yml` —, e não por anotação, porque os testes de fatia (`@WebMvcTest`) só respeitam a propriedade;
 - sessão `STATELESS`; CSRF desabilitado (não há autenticação por cookie nem endpoint de escrita) — **o marco de autenticação deve reavaliar CSRF obrigatoriamente**;
 - sem CORS (ADR-005); cabeçalhos de segurança padrão do Spring Security mantidos.
 
-**Consequências.** Rotas novas nascem protegidas; qualquer rota pública nova exige alteração explícita da `SegurancaConfig` (revisada). Swagger público em todos os ambientes no Marco 0 (não existe produção); pode ser desligado por variável (`SPRINGDOC_API_DOCS_ENABLED=false`, `SPRINGDOC_SWAGGER_UI_ENABLED=false`).
+**Consequências.** Rotas novas nascem protegidas; qualquer rota pública nova exige alteração explícita da `SegurancaConfig` (revisada). Swagger público em todos os ambientes no Marco 0 (não existe produção); pode ser desligado por variável (`SPRINGDOC_API_DOCS_ENABLED=false`, `SPRINGDOC_SWAGGER_UI_ENABLED=false`). Com o Swagger UI público, `springdoc.swagger-ui.query-config-enabled` **deve permanecer `false`** (padrão): impede carregar spec/configuração externa via `?url=`/`?configUrl=`, vetor clássico de XSS do Swagger UI. `/v3/api-docs.yaml` responde 401 (fica fora do `permitAll` de `/v3/api-docs/**`) — aceitável; o contrato publicado é o JSON.
+
+**Pendências obrigatórias do marco de autenticação** (e itens da auditoria de segurança):
+- reavaliar CSRF conforme o mecanismo escolhido (obrigatório reabilitar se houver autenticação por cookie);
+- o 401 do Marco 0 sai **sem** o cabeçalho `WWW-Authenticate`, que a RFC 9110 exige em toda resposta 401 — não há esquema de autenticação a anunciar. Ao escolher o mecanismo, o `TratadorNaoAutenticado` passa a enviar o desafio correspondente (ex.: `Bearer`);
+- `HEAD /api/saude` responde 401, porque só o `GET` é público (os healthchecks usam `GET` — sem impacto no Marco 0). Decidir se `HEAD` acompanha o `GET` nas rotas públicas;
+- os itens de "Pendências de segurança → Marco de autenticação" (sessão em cookie com CSRF em vez de JWT em `localStorage`, encoder de senha, rate limit e mensagem uniforme no login, IDOR, `@EnableMethodSecurity`).
 
 ### ADR-008 — Verificação de saúde própria em `/api/saude` em vez do Actuator
 
@@ -314,14 +366,18 @@ Lacuna conhecida: erros lançados em filtros fora do Spring Security caem no `/e
 **Contexto.** Testes com Testcontainers exigem Docker e são lentos; os unitários não.
 
 **Decisão.** `*Test` (Surefire, `./mvnw test`): unitários com Mockito e slices (`@WebMvcTest` importando a `SegurancaConfig`), sem Docker. `*IT` (Failsafe, declarado no `pom.xml`, `./mvnw verify`): `@SpringBootTest` + MockMvc + `TestcontainersConfig` (PostgreSQL 18 com `@ServiceConnection`), compartilhado via cache de contexto — um container por execução. Os sufixos `Test`/`IT` são os padrões de inclusão do Surefire/Failsafe e ficam como estão (ADR-013).
+- **Todo `*IT` usa a meta-anotação `suporte/TesteDeIntegracao`** (`@SpringBootTest(webEnvironment = RANDOM_PORT)` + `@AutoConfigureMockMvc` + `@Import(TestcontainersConfig.class)`) e nada além dela que altere o contexto (`@MockitoBean`, `@TestPropertySource`, perfis...). Assim o cache de contexto reaproveita a mesma aplicação e o mesmo container em toda a execução. Um `*IT` que precise de contexto diferente é exceção justificada no próprio teste.
+- **Mockito como agente Java**: Surefire e Failsafe usam `argLine` `@{argLine} -javaagent:${org.mockito:mockito-core:jar} -Xshare:off`, com a propriedade `argLine` declarada vazia em `<properties>` do `pom.xml` (caminho do jar exposto pelo goal `properties` do `maven-dependency-plugin`). Motivo: o JDK 21+ desaconselha o auto-anexo dinâmico do inline mock maker; `-Xshare:off` evita o aviso de CDS. O `@{argLine}` (substituição tardia) já deixa o caminho pronto para JaCoCo ou outra ferramenta que preencha `argLine`: ela acrescenta seu agente sem sobrescrever o do Mockito — basta não redefinir o `<argLine>` dos plugins.
 
-**Consequências.** `./mvnw verify` é o critério de entrega do backend e exige Docker em execução; `./mvnw test` dá retorno rápido sem Docker.
+**Consequências.** `./mvnw verify` é o critério de entrega do backend e exige Docker em execução; `./mvnw test` dá retorno rápido sem Docker. Um único contexto Spring nos `*IT` mantém a suíte rápida; o revisor rejeita `*IT` sem `@TesteDeIntegracao`.
 
 ### ADR-012 — Configuração por variáveis de ambiente
 
 **Contexto.** Configuração deve vir do ambiente, com `.env.example` na raiz.
 
-**Decisão.** O `docker compose` lê `.env` da raiz (fora do git) e tem padrões de desenvolvimento embutidos (`${VAR:-padrão}`), então `docker compose up` funciona sem `.env`. O backend lê `BANCO_URL`, `BANCO_USUARIO`, `BANCO_SENHA` com padrões que apontam para o PostgreSQL do compose (`jdbc:postgresql://localhost:5432/kontra`, `kontra`/`kontra`) — **credenciais apenas de desenvolvimento**; qualquer ambiente real deve sobrescrevê-las. Variáveis só de dev local do frontend (`DESTINO_PROXY_API`) são lidas pelo `vite.config.ts`, não expostas ao bundle (sem prefixo `VITE_`). Variáveis impostas por terceiros mantêm o nome original (`POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` da imagem oficial; `SPRINGDOC_*` do binding do Spring). Lista completa no `docs/PLANO.md` (Marco 0) e no `.env.example`.
+**Decisão.** O `docker compose` lê `.env` da raiz (fora do git) e tem padrões de desenvolvimento embutidos (`${VAR:-padrão}`), então `docker compose up` funciona sem `.env`. O backend lê `BANCO_URL`, `BANCO_USUARIO`, `BANCO_SENHA` com padrões que apontam para o PostgreSQL do compose (`jdbc:postgresql://localhost:5432/kontra`, `kontra`/`kontra`) — **credenciais apenas de desenvolvimento**; qualquer ambiente real deve sobrescrevê-las, e antes de qualquer ambiente não-dev o fallback é removido (ver "Pendências de segurança"). Variáveis só de dev local do frontend (`DESTINO_PROXY_API`) são lidas pelo `vite.config.ts`, não expostas ao bundle (sem prefixo `VITE_`). Variáveis impostas por terceiros mantêm o nome original (`POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` da imagem oficial; `SPRINGDOC_*` do binding do Spring). Lista completa no `docs/PLANO.md` (Marco 0) e no `.env.example`.
+- Só o `docker compose` lê o `.env` da raiz. `BANCO_*` (backend fora do container), `DESTINO_PROXY_API` e `URL_BASE_E2E` são exportadas no shell ou na IDE quando for preciso mudar o padrão; o `.env.example` as lista como referência.
+- No compose, o serviço `backend` recebe `BANCO_*` montadas a partir de `POSTGRES_*` com host `banco`; nunca interpola `BANCO_*` do `.env` (que, copiado do exemplo, apontaria para `localhost`).
 
 **Consequências.** Um comando sobe tudo; o risco de credencial padrão em ambiente real fica registrado para a auditoria de segurança.
 
@@ -339,9 +395,10 @@ Lacuna conhecida: erros lançados em filtros fora do Spring Security caem no `/e
    - arquivos e nomes impostos pelas ferramentas: `application.yml`, `pom.xml`, `package.json`, `Dockerfile`, `docker-compose.yml`, `nginx.conf`, `vite.config.ts`, `orval.config.ts`, `playwright.config.ts`, `.oxlintrc.json`, `index.html`, `main.tsx`, prefixo `V<n>__` do Flyway, sufixos de teste `*Test`/`*IT` (padrões do Surefire/Failsafe), `*.test.tsx` (Vitest) e `*.spec.ts` (Playwright);
    - campos padrão do RFC 9457: `type`, `title`, `status`, `detail`, `instance`;
    - **vocabulário de camada do Spring**: sufixos `Controller`, `Service`, `Repository`, `Dto` (e as variantes de DTO `Request`/`Response`), e os pacotes de camada correspondentes;
-   - nomes gerados por ferramentas a partir dos nossos nomes (orval: `use` + operationId, `get…QueryKey`);
+   - nomes gerados por ferramentas a partir dos nossos nomes (orval: `use` + operationId, `get…QueryKey`) e nomes que a ferramenta exige de nós (orval: o tipo `ErrorType` exportado pelo mutator);
+   - textos gerados por ferramentas: o Dependabot escreve as mensagens de commit/PR em inglês (`bump X from a to b`); só o prefixo é configurável e fica em Conventional Commits (`chore(deps)`, `chore(ci)`);
    - nomes próprios, siglas e jargão consagrado: Kontra, OpenAPI, API, JSON, URL, backend, frontend, e2e, status.
-3. **Decisões do arquiteto nos pontos não cobertos pelo usuário** *(a confirmar com o usuário em caso de dúvida)*:
+3. **Decisões do arquiteto nos pontos não cobertos pelo usuário** *(confirmado pelo usuário em 2026-10-06)*:
    - **Pacotes técnicos do backend**: `config` e `domain` ficam em inglês, como os demais pacotes de camada (`controller`, `service`, `repository`, `dto`); classes em `config/` usam o sufixo `Config` (`SegurancaConfig`, `OpenApiConfig`, `TestcontainersConfig`). Pacotes que não são camada vão para o português: `comum/erro`, `suporte` (testes), e os módulos (`saude`, `contrato`).
    - **Classe principal**: `KontraApplication` (convenção do Spring Boot gerada pelo Initializr, mesma família dos sufixos de camada).
    - **Pastas estruturais do frontend** ficam em inglês, como o `features/` do exemplo do usuário: `app/`, `api/generated/` (`endpoints/`, `model/`), `lib/`, `components/`, `features/`, `routes/`, `test/`; e `e2e/tests/`. Tudo dentro delas (módulos, componentes, arquivos) em português.
@@ -378,5 +435,10 @@ Lacuna conhecida: erros lançados em filtros fora do Spring Security caem no `/e
 | Variável de ambiente | MAIÚSCULAS | `BANCO_URL`, `PORTA_FRONTEND` |
 | Serviço do compose | minúsculas | `banco` |
 | Branch / commit | português (tipos do Conventional Commits como são) | `feat/marco-0-fundacao`, `feat(backend): adiciona verificação de saúde` |
+
+**Locale fixo.** O backend usa `spring.web.locale: pt_BR` com `spring.web.locale-resolver: fixed`: mensagens do Bean Validation (e demais mensagens resolvidas por locale) saem sempre em português, independentemente do `Accept-Language` do cliente e do locale da JVM/SO. Mensagens personalizadas de validação também são escritas em português. Impactos:
+- `Accept-Language` é **ignorado** pela API (intencional: a aplicação só fala português).
+- `@DateTimeFormat`/`@NumberFormat` sem `iso` passariam a interpretar no formato pt-BR (ex.: `06/10/2026`, vírgula decimal). **Na API, sempre `iso = ...`** (datas/horas ISO-8601, números com ponto) — o contrato usa ISO-8601.
+- Validação fora de uma requisição HTTP (jobs, inicialização) usa o locale da JVM, não o `spring.web.locale`. Por isso a imagem Docker do backend fixa `JAVA_TOOL_OPTIONS=-Duser.language=pt -Duser.country=BR` (T11 do Marco 0); fora do container, vale o locale da máquina.
 
 **Consequências.** Código e contrato legíveis para o time em português; o cliente gerado herda os nomes do `operationId`. Convivem trechos em inglês impostos por frameworks e ferramentas (`useObterSaude`, `getObterSaudeQueryKey`, `SaudeController`) — esperado e aceito. O revisor passa a fiscalizar a convenção.

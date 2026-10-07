@@ -24,7 +24,7 @@ Deixar o monorepo pronto para desenvolver funcionalidades, provando a cadeia int
 - Autenticação, usuários, perfis, permissões, CSRF definitivo, CORS.
 - Actuator, métricas, logs estruturados, tracing.
 - React Hook Form, Zod, MSW, mocks gerados pelo orval, i18n além do locale do MUI.
-- Deploy, perfis de produção, HTTPS, segredos reais, Dependabot, cobertura mínima, formatador de código.
+- Deploy, perfis de produção, HTTPS, segredos reais, cobertura mínima, formatador de código. *(O Dependabot, inicialmente fora de escopo, entrou no fechamento do marco por recomendação da auditoria de segurança — ADR-001.)*
 - Push para o `origin` e PRs (só quando o usuário pedir).
 
 ### Contrato da API
@@ -70,7 +70,7 @@ Exemplos:
 
 #### Schemas comuns (formato de erro)
 
-`ProblemaResponse`, `ErroDeCampo` e `CodigoErro` (enum nomeado, `enumAsRef = true`), conforme `docs/ARQUITETURA.md` → "Formato padronizado de erro" (extensões `codigo`, `ocorridoEm`, `erros[]` com `campo`/`mensagem`; `title` em pt-BR por código). Precisam aparecer em `components.schemas` do snapshot já no Marco 0 (referenciados pela resposta 500 de `/api/saude`), para o frontend tipar o `ErroApi`.
+`ProblemaResponse`, `ErroDeCampo` e `CodigoErro` (enum nomeado, `enumAsRef = true`), conforme `docs/ARQUITETURA.md` → "Formato padronizado de erro" (extensões `codigo`, `ocorridoEm`, `erros[]` com `campo`/`mensagem`; `title` em pt-BR por código; `detail` sempre presente; 4xx sem código próprio → `ERRO_REQUISICAO` com o status real, 5xx → `ERRO_INTERNO`; `type` e `instance` com `format: uri-reference`, como a RFC 9457 define — ajustado na T6). Precisam aparecer em `components.schemas` do snapshot já no Marco 0 (referenciados pela resposta 500 de `/api/saude`), para o frontend tipar o `ErroApi`.
 
 #### Comportamento global (não entra no cliente gerado)
 
@@ -78,7 +78,12 @@ Exemplos:
 |---|---|
 | Qualquer rota fora da lista pública (inclusive inexistente), ex.: `GET /api/inexistente` | 401, `application/problem+json`, `codigo` = `NAO_AUTENTICADO`, sem `Set-Cookie` |
 | `GET /v3/api-docs`, `GET /swagger-ui.html` (e `/swagger-ui/**`) | 200 (ou redirecionamento para `/swagger-ui/index.html`), sem autenticação |
-| `POST /api/saude` (ou outro método além de `GET`) | 401 `NAO_AUTENTICADO` — a regra pública vale só para `GET` |
+| `POST /api/saude` (ou outro método além de `GET`, inclusive `HEAD`) | 401 `NAO_AUTENTICADO` — a regra pública vale só para `GET` (pendência registrada no ADR-007) |
+| Erro despachado para `/error` (fora do Spring MVC) | Problem Details pelo `ErroPadraoController`: status original (ausente → 404), `codigo` por `CodigoErro.deStatus`, `instance` = URI original |
+| `TRACE` em qualquer rota | Direto no backend (`:8080`): 405 `METODO_NAO_PERMITIDO` (barrado pelo Tomcat, respondido pelo `/error`). Pelo nginx (`:3000`): 405 em HTML do próprio nginx — fora do contrato (lacuna aceita) |
+| Método desconhecido (ex.: `FOO`) | 400 `REQUISICAO_MALFORMADA` (rejeitado pelo firewall, `TratadorRequisicaoRejeitada`) |
+| URL rejeitada pelo firewall do Spring Security (ex.: `;`, `//`, `%2e%2e`, dupla codificação `%252e`) | 400 `REQUISICAO_MALFORMADA` (Problem Details, `TratadorRequisicaoRejeitada`, `detail` específico) |
+| Requisição recusada pelo Tomcat antes do servlet (barra codificada `/api/a%2Fb`, `%` solto, URI ou cabeçalho acima de 8 KB) | 400 no formato do próprio Tomcat, sem detalhe interno — **fora do contrato** (lacuna aceita) |
 
 ### Migrações
 
@@ -105,6 +110,8 @@ Exemplos:
 
 O `.env.example` na raiz lista todas, agrupadas por consumidor, sem segredos reais. O compose usa `${VAR:-padrão}` e funciona sem `.env`.
 
+**Quem lê o `.env` da raiz**: só o `docker compose` (`POSTGRES_*` e `PORTA_*`). `BANCO_*` (backend rodando fora do container), `DESTINO_PROXY_API` (Vite) e `URL_BASE_E2E` (Playwright) **não** são lidas do `.env` — quando for preciso mudar o padrão, exportar no shell ou na configuração de execução da IDE. O `.env.example` as lista apenas como referência. Dentro do compose, o backend recebe `BANCO_*` montadas a partir de `POSTGRES_*` (ver T11).
+
 ### Tarefas
 
 Legenda: cada tarefa = 1 commit na branch `feat/marco-0-fundacao` (ADR-010). Fluxo por tarefa: implementa → revisor → qa → devops commita. Nomes conforme ADR-013. Comandos de backend no Git Bash (`./mvnw`); no PowerShell use `.\mvnw.cmd`. Testes `*IT` exigem o Docker em execução.
@@ -125,7 +132,7 @@ Legenda: cada tarefa = 1 commit na branch `feat/marco-0-fundacao` (ADR-010). Flu
 
 **T2 — docker compose com PostgreSQL + `.env.example` inicial** · `devops`
 - **Área**: `docker-compose.yml` (só o serviço `banco` por enquanto), `.env.example`.
-- **Fazer**: `name: kontra`; serviço `banco` com `postgres:18-alpine`, `POSTGRES_DB/USER/PASSWORD` com padrões `kontra`, porta `${PORTA_POSTGRES:-5432}:5432`, volume nomeado `kontra-dados-banco` montado em **`/var/lib/postgresql`** (layout do PG 18), healthcheck `pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}`. `.env.example` com as variáveis de banco/portas da tabela acima.
+- **Fazer**: `name: kontra`; serviço `banco` com `postgres:18-alpine`, `POSTGRES_DB/USER/PASSWORD` com padrões `kontra`, porta publicada só no loopback `"127.0.0.1:${PORTA_POSTGRES:-5432}:5432"`, volume nomeado `kontra-dados-banco` montado em **`/var/lib/postgresql`** (layout do PG 18), healthcheck por TCP `pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}`, sem `restart` policy. `.env.example` com as variáveis de banco/portas da tabela acima.
 - **Pronto**:
   - `docker compose config` sem erro.
   - `docker compose up -d banco --wait` → exit 0; `docker compose ps` → `banco` `healthy`.
@@ -150,29 +157,40 @@ Legenda: cada tarefa = 1 commit na branch `feat/marco-0-fundacao` (ADR-010). Flu
   - `GET /api/inexistente` sem autenticação → 401, `Content-Type: application/problem+json`, `codigo` = `NAO_AUTENTICADO`, `status` = 401, `title` = "Não autenticado", `ocorridoEm` presente, sem `Set-Cookie`.
   - Corpo inválido (Bean Validation) → 400 `ERRO_VALIDACAO` com `erros[].campo` e `erros[].mensagem`.
   - JSON malformado → 400 `REQUISICAO_MALFORMADA`.
+  - 4xx sem código próprio → `ERRO_REQUISICAO` com o status real (teste do `CodigoErro.deStatus` para 406 e 413, e um teste de fatia com 406 — `Accept` não atendível — verificando `status` 406 e `codigo` `ERRO_REQUISICAO`); 5xx do framework → `ERRO_INTERNO` (decisão de 2026-10-06, ver ADR-006).
   - `ExcecaoApi` → status e `codigo` informados na exceção.
   - Exceção inesperada → 500 `ERRO_INTERNO`; o corpo não contém stack trace nem nome de classe de exceção.
   - Log de inicialização sem `Using generated security password` (verificável no log do `spring-boot:run`).
 - **Depende de**: T3.
 
 **T5 — springdoc + snapshot versionado do OpenAPI** · `backend`
-- **Área**: `backend/pom.xml` (`org.springdoc:springdoc-openapi-starter-webmvc-ui:3.1.1`), `config/OpenApiConfig.java`, `application.yml` (`springdoc.writer-with-order-by-keys: true`, `springdoc.writer-with-default-pretty-printer: true`), `src/test/java/br/com/kontra/config/SnapshotOpenApiIT.java`, `backend/openapi/openapi.json`.
-- **Fazer**: `OpenApiConfig` com `info` fixo (`API do Kontra`, `0.1.0`) e `servers` fixo (`/`). `SnapshotOpenApiIT` conforme ADR-004: compara como árvore JSON; com `-Dopenapi.atualizarSnapshot=true` regrava o arquivo (JSON indentado, LF, newline final) e passa; sem a propriedade e com divergência, falha com mensagem que cita o comando de atualização. Garantir que a propriedade chega ao JVM do Failsafe.
+- **Área**: `backend/pom.xml` (`org.springdoc:springdoc-openapi-starter-webmvc-ui:3.1.1`), `config/OpenApiConfig.java`, `application.yml` (`springdoc.writer-with-order-by-keys: true`, `springdoc.writer-with-default-pretty-printer: true`, `springdoc.paths-to-match: /api/**`), `src/test/java/br/com/kontra/config/SnapshotOpenApiIT.java`, `backend/openapi/openapi.json`.
+- **Fazer**: `OpenApiConfig` com `info` fixo (`API do Kontra`, `0.1.0`) e `servers` fixo (`/`). O `ErroPadraoController` (`/error`) **não** pode aparecer no OpenAPI nem no snapshot: usar `springdoc.paths-to-match: /api/**` (recomendado — toda a API fica sob `/api`, ADR-005; rota nova fora de `/api` não entra no contrato por engano) ou, alternativamente, `@Hidden` no controller. `SnapshotOpenApiIT` (anotado com `@TesteDeIntegracao`, ADR-011) conforme ADR-004: compara como árvore JSON; com `-Dopenapi.atualizarSnapshot=true` regrava o arquivo (JSON indentado, LF, newline final) e passa; sem a propriedade e com divergência, falha com mensagem que cita o comando de atualização. Garantir que a propriedade chega ao JVM do Failsafe.
 - **Pronto**:
   - `./mvnw verify -Dopenapi.atualizarSnapshot=true` → cria `backend/openapi/openapi.json` com `info.title` = `API do Kontra` e `servers[0].url` = `/`.
   - Rodar `./mvnw verify` duas vezes seguidas → o arquivo não muda (`sha256sum backend/openapi/openapi.json` igual antes/depois).
   - Alterar `info.title` à mão no arquivo → `./mvnw verify` **falha** com a mensagem de atualização; reverter → passa.
+  - O snapshot não tem o path `/error` (nem nenhum fora de `/api`): `node -e "const s=require('./backend/openapi/openapi.json');console.log(Object.keys(s.paths||{}).filter(p=>!p.startsWith('/api/')).length)"` → `0`.
   - App rodando: `curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/v3/api-docs` → `200`; `http://localhost:8080/swagger-ui.html` abre sem autenticação.
 - **Depende de**: T4.
 
 **T6 — Endpoint `GET /api/saude`** · `backend`
-- **Área**: `saude/controller/SaudeController.java`, `saude/service/SaudeService.java`, `saude/dto/SaudeResponse.java`, `saude/dto/StatusComponente.java`, testes, `backend/openapi/openapi.json` (atualizado).
+- **Área**: `saude/controller/SaudeController.java`, `saude/service/SaudeService.java`, `saude/dto/SaudeResponse.java`, `saude/dto/StatusComponente.java`, testes, `backend/openapi/openapi.json` (atualizado), `application.yml`, `config/SnapshotOpenApiIT.java` (ajuste), `backend/.mvn/jvm.config`.
 - **Fazer**: conforme o contrato acima. `SaudeController.obterSaude()` → `SaudeService.verificarBancoDeDados()`. Anotações: `@Tag(name = "saude")`, `@Operation(operationId = "obterSaude", ...)`, `@ApiResponse` para 200, 503 (`SaudeResponse`) e 500 (`ProblemaResponse`, `application/problem+json`); campos obrigatórios com `requiredMode = REQUIRED`; enums com `enumAsRef = true`.
+  - Como os schemas de erro passam a aparecer no snapshot nesta tarefa, `ProblemaResponse`, `ErroDeCampo` e `CodigoErro` (`comum/erro`) recebem `@Schema`: `requiredMode = REQUIRED` em `type`, `title`, `status`, `detail`, `codigo`, `ocorridoEm` (`ProblemaResponse`) e em `campo`, `mensagem` (`ErroDeCampo`); `instance` e `erros` opcionais; `enumAsRef = true` em `CodigoErro`; descrições em português.
+  - `springdoc.override-with-generic-response: false` no `application.yml` (intenção explícita de não injetar as respostas do `@RestControllerAdvice` em todas as operações).
+  - Teste que confere que as chaves do JSON real de `SaudeResponse` e de `ProblemaResponse` batem com `properties`/`required` do schema publicado no snapshot (fecha a lacuna Jackson 2 do springdoc × Jackson 3 da aplicação — ver ARQUITETURA, "DTOs do contrato e Jackson").
+  - `SnapshotOpenApiIT` recusa a regravação (`-Dopenapi.atualizarSnapshot=true`) quando a variável de ambiente `CI` está definida, com mensagem clara.
+  - `backend/.mvn/jvm.config` com `-Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8` (acentos corretos no console do Maven no Windows).
 - **Pronto**:
   - `SaudeServiceTest` (Mockito): conexão válida → `DISPONIVEL`/`DISPONIVEL`; `SQLException` ou `isValid=false` → `INDISPONIVEL`/`INDISPONIVEL`.
   - `SaudeControllerTest` (`@WebMvcTest` + `SegurancaConfig`, service mockado): 200 com corpo `DISPONIVEL`; 503 com corpo `INDISPONIVEL`; sem autenticação; `Cache-Control: no-store`.
-  - `SaudeIT` (Testcontainers): `GET /api/saude` → 200 e `{"status":"DISPONIVEL","bancoDeDados":"DISPONIVEL","verificadoEm":"..."}`.
-  - Snapshot atualizado: `node -e "const s=require('./backend/openapi/openapi.json');console.log(s.paths['/api/saude'].get.operationId, Object.keys(s.components.schemas).sort().join(','))"` → `obterSaude CodigoErro,ErroDeCampo,ProblemaResponse,SaudeResponse,StatusComponente`; `SaudeResponse.required` contém `status`, `bancoDeDados`, `verificadoEm`.
+  - `SaudeIT` (`@TesteDeIntegracao`, Testcontainers): `GET /api/saude` → 200 e `{"status":"DISPONIVEL","bancoDeDados":"DISPONIVEL","verificadoEm":"..."}`.
+  - Snapshot atualizado: `node -e "const s=require('./backend/openapi/openapi.json');console.log(s.paths['/api/saude'].get.operationId, Object.keys(s.components.schemas).sort().join(','))"` → `obterSaude CodigoErro,ErroDeCampo,ProblemaResponse,SaudeResponse,StatusComponente`; `SaudeResponse.required` contém `status`, `bancoDeDados`, `verificadoEm`; `ProblemaResponse.required` contém `type`, `title`, `status`, `detail`, `codigo`, `ocorridoEm`; `CodigoErro.enum` inclui `ERRO_REQUISICAO`.
+  - No snapshot, `/api/saude` tem só as respostas `200`, `503` e `500`: `node -e "const s=require('./backend/openapi/openapi.json');console.log(Object.keys(s.paths['/api/saude'].get.responses).sort().join(','))"` → `200,500,503`.
+  - O teste de aderência JSON real × schema passa; renomear um campo só no JSON (ex.: `@JsonProperty`) sem atualizar o snapshot faz o teste falhar.
+  - `CI=true ./mvnw verify -Dopenapi.atualizarSnapshot=true` → falha com a mensagem de recusa e o arquivo não é alterado.
+  - No Git Bash, a saída do `./mvnw verify` mostra acentos corretamente (ex.: nomes/mensagens de teste com "ç"/"ã" legíveis).
   - Manual: com `docker compose up -d banco --wait` e `./mvnw spring-boot:run`: `curl -i http://localhost:8080/api/saude` → 200; `docker compose stop banco` → em até 10 s responde 503 com `INDISPONIVEL`; `docker compose start banco` → volta a 200.
   - `./mvnw verify` → `BUILD SUCCESS`.
 - **Depende de**: T5.
@@ -197,7 +215,7 @@ Legenda: cada tarefa = 1 commit na branch `feat/marco-0-fundacao` (ADR-010). Flu
 
 **T9 — Geração do cliente com orval + mutator** · `frontend`
 - **Área**: `frontend/orval.config.ts`, `src/lib/cliente-api.ts` (+ `cliente-api.test.ts`), `src/api/generated/**` (gerado, versionado), `package.json` (`orval` **8.40.0 exata**, script `generate:api`: `orval`), `.oxlintrc.json` (ignorar `src/api/generated`).
-- **Fazer**: conforme ADR-003/ADR-004; entrada `../backend/openapi/openapi.json` (somente leitura). `requisicaoApi` e `ErroApi` conforme a ARQUITETURA (`ErroApi.problema` tipado com o `ProblemaResponse` gerado).
+- **Fazer**: conforme ADR-003/ADR-004; entrada `../backend/openapi/openapi.json` (somente leitura). `requisicaoApi` e `ErroApi` conforme a ARQUITETURA (`ErroApi.problema` tipado com o `ProblemaResponse` gerado). `override.fetch.includeHttpResponseReturnType: false` (funções/hooks devolvem o corpo: `obterSaude(): Promise<SaudeResponse>`); `cliente-api.ts` exporta `ErrorType<_ErrosDoContrato> = ErroApi | Error` (usado pelo orval como `TError`). `"allowScripts": { "esbuild": false }` no `package.json` (ADR-001).
 - **Pronto**:
   - `npm run generate:api` → `src/api/generated/` com `useObterSaude` e `getObterSaudeQueryKey` (`grep -r "useObterSaude" src/api/generated` encontra) e os tipos `SaudeResponse`, `StatusComponente`, `ProblemaResponse`, `CodigoErro`.
   - Rodar `npm run generate:api` de novo → `git status --porcelain src/api/generated` sem alterações (após o commit) / conteúdo idêntico (antes do commit).
@@ -211,6 +229,7 @@ Legenda: cada tarefa = 1 commit na branch `feat/marco-0-fundacao` (ADR-010). Flu
   - carregando: elemento `role="progressbar"` com nome acessível "Verificando status do sistema";
   - sucesso: lista de definição (`<dl>`) com termos "API" e "Banco de dados"; valores "Operacional" (`DISPONIVEL`) ou "Indisponível" (`INDISPONIVEL`); "API" é "Operacional" sempre que a resposta chega; texto "Última verificação: dd/mm/aaaa hh:mm:ss" (a partir de `verificadoEm`, fuso do navegador);
   - erro (rede, 5xx — inclusive 503): `role="alert"` com "Não foi possível obter o status do sistema." e botão "Tentar novamente" que refaz a consulta.
+  - **Como ficou (implementado)**: o componente é uma região (`<section aria-labelledby>`) nomeada pelo título "Status do sistema", **sem** `role="status"`/`aria-live` (regiões ao vivo aninhadas seriam anunciadas em duplicidade e o refetch em segundo plano releria tudo); o `role="alert"` existe **só no estado de erro**. Durante a nova tentativa o alerta continua montado e o botão mostra "Tentando…" com `aria-disabled` (não `disabled`, que tiraria o foco); ao terminar, o foco vai para a região (sucesso) ou volta ao botão (nova falha). **Sem retry automático nesta tela** (`useObterSaude({ query: { retry: false } })`): a pessoa refaz pelo botão, sem espera extra com o banco fora.
 - **Pronto**:
   - Testes (fetch simulado com corpos `satisfies SaudeResponse`; descrições em português): carregando; sucesso com dois "Operacional"; 503 → alerta; clique em "Tentar novamente" dispara nova requisição.
   - `npm run lint`, `npm run test`, `npm run build` passam.
@@ -220,35 +239,39 @@ Legenda: cada tarefa = 1 commit na branch `feat/marco-0-fundacao` (ADR-010). Flu
 **T11 — Dockerfiles, nginx e compose completo** · `devops`
 - **Área**: `backend/Dockerfile`, `backend/.dockerignore`, `frontend/Dockerfile`, `frontend/.dockerignore`, `frontend/nginx.conf`, `docker-compose.yml`, `.env.example`.
 - **Fazer**:
-  - Backend: build em `eclipse-temurin:21-jdk` (`chmod +x mvnw`, camada de dependências com `./mvnw -B dependency:go-offline`, depois `./mvnw -B -DskipTests package`); runtime `eclipse-temurin:21-jre-alpine`, usuário não root, `EXPOSE 8080`.
+  - Backend: build em `eclipse-temurin:21-jdk` (`chmod +x mvnw`, camada de dependências com `./mvnw -B dependency:go-offline`, depois `./mvnw -B -DskipTests package`); runtime `eclipse-temurin:21-jre-alpine`, usuário não root, `EXPOSE 8080`, `ENV JAVA_TOOL_OPTIONS="-Duser.language=pt -Duser.country=BR"` (locale da JVM em pt-BR para validação fora de requisição — ADR-013, "Locale fixo").
   - Frontend: build em `node:24-alpine` (`npm ci && npm run build`; o cliente gerado já está versionado); runtime `nginxinc/nginx-unprivileged:1.30-alpine` ouvindo 8080; `nginx.conf` com `location /api/ { proxy_pass http://backend:8080; ... }` (sem barra final, preserva `/api`), cabeçalhos `X-Forwarded-*`, fallback SPA `try_files $uri $uri/ /index.html`, `index.html` com `Cache-Control: no-cache`, `/assets/` com cache longo `immutable`.
-  - Compose: `backend` (variáveis `BANCO_*` derivadas de `POSTGRES_*`, `depends_on: banco: service_healthy`, healthcheck `wget -qO- http://localhost:8080/api/saude`, porta `${PORTA_BACKEND:-8080}:8080`); `frontend` (`depends_on: backend: service_healthy`, healthcheck `wget -qO- http://localhost:8080/`, porta `${PORTA_FRONTEND:-3000}:8080`). `.env.example` completo.
+  - Compose: `backend` (variáveis `BANCO_*` derivadas de `POSTGRES_*`, `depends_on: banco: service_healthy`, healthcheck `wget -qO- http://localhost:8080/api/saude`, porta `"127.0.0.1:${PORTA_BACKEND:-8080}:8080"`); `frontend` (`depends_on: backend: service_healthy`, healthcheck `wget -qO- http://localhost:8080/`, porta `"127.0.0.1:${PORTA_FRONTEND:-3000}:8080"`). Sem `restart` policy em nenhum serviço. `.env.example` completo.
+  - **Atenção**: no serviço `backend`, os `BANCO_*` são montados a partir de `POSTGRES_*` com host `banco` (ex.: `BANCO_URL: jdbc:postgresql://banco:5432/${POSTGRES_DB:-kontra}`, `BANCO_USUARIO: ${POSTGRES_USER:-kontra}`, `BANCO_SENHA: ${POSTGRES_PASSWORD:-kontra}`) — **nunca** interpolar `${BANCO_URL}`/`${BANCO_USUARIO}`/`${BANCO_SENHA}` do `.env`: um `.env` copiado do exemplo (com `localhost`) quebraria o backend dentro do container.
 - **Pronto**:
   - `docker compose config` sem erro; `docker compose up -d --build --wait` → exit 0; `docker compose ps` → `banco`, `backend`, `frontend` `healthy`.
   - `curl -s http://localhost:3000/api/saude` → JSON com `"status":"DISPONIVEL"`.
   - `curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/qualquer/rota` → `200` (fallback SPA).
   - `curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/swagger-ui/index.html` → `200`.
   - `docker compose exec backend id -u` e `docker compose exec frontend id -u` → diferentes de `0`.
+  - `docker compose logs backend` mostra `Picked up JAVA_TOOL_OPTIONS: -Duser.language=pt -Duser.country=BR`.
   - Com a T10 pronta: `http://localhost:3000` mostra "Operacional" para API e Banco de dados.
   - `docker compose down`.
 - **Depende de**: T2, T6, T8 (e T10 para o último item visual). **Paralela a T9/T10.**
 
 **T12 — Projeto Playwright e e2e mínimo** · `qa`
-- **Área**: `e2e/package.json` (`kontra-e2e`, `@playwright/test` 1.63.0), `e2e/package-lock.json`, `e2e/playwright.config.ts`, `e2e/tsconfig.json`, `e2e/tests/saude.spec.ts`, `e2e/tests/pagina-nao-encontrada.spec.ts`.
-- **Fazer**: `baseURL` = `process.env.URL_BASE_E2E ?? 'http://localhost:3000'`; projeto único Chromium; `retries` 1 só no CI; reporters `list` + `html` (sem abrir automaticamente); `trace: 'on-first-retry'`; sem `webServer`. Seletores acessíveis, conforme o contrato visual da T10; títulos dos testes em português. Cenários mínimos:
+- **Área**: `e2e/package.json` (`kontra-e2e`, `@playwright/test` 1.63.0; scripts `test`, `report`, `typecheck` = `tsc --noEmit`), `e2e/package-lock.json`, `e2e/playwright.config.ts`, `e2e/tsconfig.json`, `e2e/tests/saude.spec.ts`, `e2e/tests/pagina-nao-encontrada.spec.ts`.
+- **Fazer**: `baseURL` = `process.env.URL_BASE_E2E ?? 'http://localhost:3000'`; projeto único Chromium; `retries` 1 só no CI; reporters `list` + `html` (sem abrir automaticamente), mais `github` no CI; `forbidOnly` no CI; `trace: 'on-first-retry'`; sem `webServer`. Seletores acessíveis, conforme o contrato visual da T10; títulos dos testes em português. Cenários mínimos:
   1. `/` exibe "Status do sistema" e "Operacional" para "API" e para "Banco de dados";
   2. `GET /api/saude` (fixture `request`, pela origem do frontend) → 200, `status` = `DISPONIVEL`;
   3. rota inexistente da SPA → "Página não encontrada"; o link "Voltar ao início" volta para `/`;
   4. `GET /api/inexistente` → 401 com `Content-Type` `application/problem+json` e `codigo` = `NAO_AUTENTICADO`.
   - Exploratório (relatado, fora da suíte): `docker compose stop banco` → a tela mostra o alerta e "Tentar novamente".
-- **Pronto**: `docker compose up -d --build --wait`; `cd e2e && npm ci && npx playwright install chromium && npx playwright test` → todos passam (≥ 4); `docker compose down`.
+  - **Como ficou (implementado)**: **6 testes** em três grupos — `describe('Status do sistema')`: sucesso; erro → "Tentar novamente" → recuperação; erro → nova falha mantém o alerta e devolve o foco ao botão; `describe('Página não encontrada')`: o cenário 3; `describe('API')`: os cenários 2 e 4 (fixture `request`). Os cenários de erro/recuperação são **determinísticos**: `page.route('**/api/saude')` simula a falha e um "portão" segura as chamadas seguintes até o teste liberá-las (sem parar o banco). **O e2e só vale contra o build de produção** (stack do compose/nginx): em `npm run dev` o `StrictMode` do React duplica a primeira requisição e quebra a contagem dos cenários com portão.
+- **Pronto**: `docker compose up -d --build --wait`; `cd e2e && npm ci && npm run typecheck && npx playwright install chromium && npx playwright test` → os 6 passam; `docker compose down`.
 - **Depende de**: T10, T11.
 
 **T13 — Workflow de CI: jobs de backend e frontend** · `devops`
-- **Área**: `.github/workflows/ci.yml`.
-- **Fazer**: gatilhos `push` (todas as branches) e `pull_request`; `permissions: contents: read`; `concurrency` por ref com `cancel-in-progress`.
-  - Job `backend` (`ubuntu-latest`, `working-directory: backend`): `actions/checkout@v7`; `actions/setup-java@v6` (Temurin 21, `cache: maven`); `./mvnw -B verify`; em falha, `actions/upload-artifact@v7` com `target/surefire-reports` e `target/failsafe-reports`.
-  - Job `frontend` (`working-directory: frontend`): checkout; `actions/setup-node@v7` (Node 24, `cache: npm`, `cache-dependency-path: frontend/package-lock.json`); `npm ci`; `npm run lint`; `npm run test`; `npm run build`; `npm run generate:api` e `git diff --exit-code -- src/api/generated`.
+- **Área**: `.github/workflows/ci.yml`, `.github/dependabot.yml`.
+- **Fazer**: gatilhos `push` (todas as branches), `pull_request` e `workflow_dispatch`; `permissions: contents: read`; `concurrency` por ref, com `cancel-in-progress` **só fora da `main`** (`github.ref != 'refs/heads/main'`). Actions **fixadas por SHA** do commit, com a versão em comentário: `actions/checkout` v7.0.1 (`persist-credentials: false`), `actions/setup-java` v6.0.1, `actions/setup-node` v7.0.0, `actions/upload-artifact` v7.0.1 (e `actions/cache` v6.1.0 no job e2e, T14). `timeout-minutes` por job.
+  - Job `backend` (`ubuntu-latest`, `working-directory: backend`): checkout; setup-java (Temurin 21, `cache: maven`); `./mvnw -B -ntp verify`; em seguida `git diff --exit-code -- openapi/openapi.json` (relativo a `backend/`; pega `-D` indevido no workflow ou snapshot não commitado) **e** `git status --porcelain -- openapi` vazio (o `git diff` não enxerga arquivo novo não rastreado); em falha, `upload-artifact` com `target/surefire-reports` e `target/failsafe-reports`.
+  - Job `frontend` (`working-directory: frontend`): checkout; setup-node (Node 24, `cache: npm`, `cache-dependency-path: frontend/package-lock.json`); `npm ci`; `npm run lint`; `npm run test`; `npm run build`; `npm run generate:api`, `git diff --exit-code -- src/api/generated` **e** `git status --porcelain -- src/api/generated` vazio.
+  - `dependabot.yml` (regras no ADR-001/ADR-003): semanal (segunda, 06:00, `America/Sao_Paulo`); `maven` (`/backend`), `npm` (`/frontend` e `/e2e`), `docker` (`/backend`, `/frontend`), `docker-compose` (`/`), `github-actions` (`/`); prefixos `chore(deps)`/`chore(ci)`; grupos de patches (o orval em grupo próprio, antes dos demais); `ignore` das linhas fixadas por ADR. Só abre PRs.
 - **Pronto** (validação local — não há push até o usuário pedir):
   - `MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/repo" -w /repo rhysd/actionlint:latest` (Git Bash, na raiz) → sem erros.
   - Num **clone limpo** da branch (`git clone --branch feat/marco-0-fundacao . <scratch>/kontra-ci`), executar no Git Bash exatamente os `run:` dos dois jobs → todos passam (prova que nada essencial ficou fora do git).
@@ -258,7 +281,7 @@ Legenda: cada tarefa = 1 commit na branch `feat/marco-0-fundacao` (ADR-010). Flu
 
 **T14 — Workflow de CI: job e2e** · `devops`
 - **Área**: `.github/workflows/ci.yml`.
-- **Fazer**: job `e2e` com `needs: [backend, frontend]`: checkout; `docker compose up -d --build --wait`; setup-node 24 (cache de `e2e/package-lock.json`); `npm ci` em `e2e/`; `npx playwright install --with-deps chromium`; `npx playwright test`; em falha, `docker compose logs` e upload de `e2e/playwright-report`; sempre (`if: always()`) `docker compose down -v`.
+- **Fazer**: job `e2e` com `needs: [backend, frontend]`: checkout; `docker compose up -d --build --wait` (sem `.env`: padrões de dev); setup-node 24 (cache de `e2e/package-lock.json`); `npm ci` e `npm run typecheck` em `e2e/`; **cache dos navegadores do Playwright** (`actions/cache` v6.1.0 em `~/.cache/ms-playwright`, chave pela versão do `@playwright/test` lida do `package-lock.json`); `npx playwright install --with-deps chromium` (as bibliotecas do sistema continuam necessárias mesmo com cache); `npx playwright test` com `URL_BASE_E2E=http://127.0.0.1:3000` (IPv4: as portas do compose só existem em IPv4); em falha, `docker compose ps` + `docker compose logs --no-color` salvo em `e2e/compose.log`, e upload do artefato `relatorio-playwright` (`e2e/playwright-report` + `e2e/compose.log`); sempre (`if: always()`) `docker compose down -v`.
 - **Pronto** (validação local — não há push até o usuário pedir): actionlint sem erros; no clone limpo, a mesma sequência (no Windows, `npx playwright install chromium`, sem `--with-deps`) passa e o ambiente é derrubado ao final. Validação real: no primeiro push para `origin` (quando o usuário pedir), o job `e2e` termina verde no GitHub Actions; falha vira tarefa `fix/`.
 - **Depende de**: T12, T13.
 
@@ -295,7 +318,7 @@ Legenda: cada tarefa = 1 commit na branch `feat/marco-0-fundacao` (ADR-010). Flu
 | # | Risco | Mitigação |
 |---|---|---|
 | R1 | O CI só roda de verdade no primeiro push para `origin` (`https://github.com/guiCoutinho/Kontra`), que só acontece quando o usuário pedir; até lá, o workflow não é exercitado no GitHub Actions. | Critério de pronto local nas T13/T14 (actionlint + mesmos comandos em clone limpo). O primeiro push é acompanhado e falhas viram tarefa `fix/`. |
-| R2 | Majors recentes (Boot 4 / Spring 7 / Jackson 3 / Security 7, Vite 8, React Router 8, MUI 9, Vitest 5, TS 6) com APIs diferentes da memória dos agentes. | Consultar a documentação da versão; se bloquear, o agente avisa e propõe fixar a major anterior; o arquiteto atualiza o ADR-001. Não sobrescrever versões gerenciadas pelo Boot. |
+| R2 | Majors recentes (Boot 4 / Spring 7 / Jackson 3 / Security 7, Vite 8, React Router 8, MUI 9, Vitest 5, TS 6) com APIs diferentes da memória dos agentes. | Consultar a documentação da versão; se bloquear, o agente avisa e propõe fixar a major anterior; o arquiteto atualiza o ADR-001. Não sobrescrever versões gerenciadas pelo Boot, exceto patches de segurança (Tomcat 11.0.26, Jackson 3.1.7/2.21.7 — ADR-001), removidos quando o Boot alcançar; o Dependabot acompanha. |
 | R3 | TypeScript 7 é o `latest` do npm e quebra peers (typescript-eslint, openapi-typescript). | `typescript ~6.0.3` fixado (ADR-001); `npm ci` sem `--legacy-peer-deps` como critério da T7. |
 | R4 | Fim de linha/bit executável: `mvnw` com CRLF ou sem `+x` quebra o CI (Linux) e o build Docker. | `.gitattributes` com `eol=lf` (T1), `chmod +x mvnw` no Dockerfile, verificação `100755` na T13, clone limpo. |
 | R5 | Snapshot do OpenAPI não determinístico (`servers` calculado pela requisição, ordem das chaves) → falsos positivos. | `servers`/`info` fixos, `writer-with-order-by-keys`, comparação como árvore JSON (T5). |
@@ -303,10 +326,10 @@ Legenda: cada tarefa = 1 commit na branch `feat/marco-0-fundacao` (ADR-010). Flu
 | R7 | Testcontainers no Windows: Docker parado ou incompatível. | `./mvnw verify` exige Docker em execução (documentado); Docker 29 exige Testcontainers ≥ 2.0.2 — o Boot 4.1.1 traz 2.0.5. `./mvnw test` funciona sem Docker. |
 | R8 | PostgreSQL 18 mudou o layout de dados da imagem (volume em `/var/lib/postgresql/data` não persiste corretamente). | Volume montado em `/var/lib/postgresql` (T2). |
 | R9 | Conflito de portas no Windows (PostgreSQL local na 5432, outros serviços na 8080/3000). | Portas do host configuráveis (`PORTA_POSTGRES`, `PORTA_BACKEND`, `PORTA_FRONTEND`). |
-| R10 | Credenciais padrão de desenvolvimento (`kontra`/`kontra`) versionadas em `application.yml`/compose. | Marcadas como só-dev (ADR-012); ambientes reais sobrescrevem por variável; item da auditoria de segurança do fim do marco. |
-| R11 | Swagger/OpenAPI públicos. | Aceito no Marco 0 (sem produção); desligável por variável; reavaliar no marco de autenticação. |
-| R12 | A verificação de saúde (`/api/saude`) trava com o banco fora (timeout padrão do Hikari é 30 s). | `connection-timeout` 5 s + `isValid(2)`; critério manual de 503 em até 10 s (T6). |
+| R10 | Credenciais padrão de desenvolvimento (`kontra`/`kontra`) versionadas em `application.yml`/compose; além disso, a aplicação conecta como **superusuário** (o `POSTGRES_USER` da imagem oficial é superuser). | Marcadas como só-dev (ADR-012); ambientes reais sobrescrevem por variável; portas publicadas só em `127.0.0.1`. Pendências registradas pela auditoria (ARQUITETURA, "Pendências de segurança"): **antes do Marco 1/primeiro dado real**, papel próprio sem superuser via `docker-entrypoint-initdb.d` (`NOSUPERUSER NOCREATEDB NOCREATEROLE`; Flyway com credencial própria se separar DDL/DML); **antes de qualquer ambiente não-dev**, remover o fallback de credenciais do `application.yml` (falhar na partida). |
+| R11 | Swagger/OpenAPI públicos (inclusive o vetor de XSS do Swagger UI ao carregar spec externo por `?url=`/`?configUrl=`). | Aceito no Marco 0 (sem produção); desligável por variável; `springdoc.swagger-ui.query-config-enabled` permanece `false` (padrão — ADR-007); `/v3/api-docs.yaml` responde 401 (fora do `permitAll`, aceitável); **antes de qualquer ambiente não-dev**, Swagger/OpenAPI desligados por padrão (`true` só em dev) — ARQUITETURA, "Pendências de segurança". |
+| R12 | A verificação de saúde (`/api/saude`) trava com o banco fora (timeout padrão do Hikari é 30 s). | `connection-timeout` 5 s + `isValid(2)`; critério manual de 503 em até 10 s (T6). Como a rota é pública, **antes de qualquer ambiente não-dev**: cache curto da resposta e `limit_req` no nginx (ARQUITETURA, "Pendências de segurança"). |
 | R13 | Agentes em paralelo na mesma árvore de trabalho misturam alterações no commit. | Propriedade por pasta (backend/frontend/devops/qa); devops adiciona arquivos por caminho explícito e confere `git diff --staged`. |
 | R14 | Job e2e lento no CI (build das imagens + download do Maven/npm). | Aceito no Marco 0; cache de camadas Docker (buildx/GHA) fica para depois. |
-| R15 | Erros lançados fora do MVC/Security usam o formato padrão do `/error` do Boot. | Lacuna documentada na ARQUITETURA; tratar quando surgir caso real. |
+| R15 | Erros que acontecem **antes** do Spring Security e do servlet (ex.: página 400 do Tomcat para URL com `%` solto) não seguem o contrato de erro. | `/error` próprio e tratamento das rejeições do firewall já cobrem o resto (ARQUITETURA, "Erros fora do Spring MVC"); a página do Tomcat não expõe detalhe interno. Lacuna aceita no Marco 0; tratar se surgir caso real. |
 | R16 | Convenção de idioma aplicada de forma inconsistente (nomes em inglês por hábito dos agentes ou da memória de exemplos). | ADR-013 com tabela de exemplos; o revisor trata nome fora da convenção como IMPORTANTE (BLOQUEANTE quando estiver no contrato da API, pois afeta o cliente gerado). |

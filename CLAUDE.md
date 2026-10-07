@@ -44,7 +44,7 @@ kontra/
 └── CLAUDE.md
 ```
 
-> Ainda não criado: tudo exceto `.claude/`, `docs/` e este arquivo. A estrutura é criada no Marco 0 (ver `docs/PLANO.md`).
+> Estrutura criada no Marco 0 (ver `docs/PLANO.md` e `docs/STATUS.md`). Visão de uso e comandos para pessoas: `README.md`; contrato da API: `docs/API.md`.
 
 ## Comandos
 
@@ -96,6 +96,8 @@ kontra/
 URLs no compose: frontend `http://localhost:3000`, backend `http://localhost:8080`, PostgreSQL `localhost:5432` (portas configuráveis via `PORTA_FRONTEND`, `PORTA_BACKEND`, `PORTA_POSTGRES`).
 
 Testcontainers requer o Docker em execução.
+
+Acentos no console: o `backend/.mvn/jvm.config` força a saída do Maven/JVM em UTF-8. O Git Bash já exibe corretamente; no PowerShell/cmd rode `chcp 65001` (ou `[Console]::OutputEncoding = [Text.Encoding]::UTF8`) antes do `.\mvnw.cmd`, senão os acentos saem trocados (code page 850).
 
 ## Ambiente de desenvolvimento
 

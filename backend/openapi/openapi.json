@@ -1,0 +1,151 @@
+{
+  "openapi" : "3.1.0",
+  "info" : {
+    "title" : "API do Kontra",
+    "version" : "0.1.0"
+  },
+  "servers" : [ {
+    "url" : "/"
+  } ],
+  "tags" : [ {
+    "description" : "Verificação de saúde da API e de suas dependências.",
+    "name" : "saude"
+  } ],
+  "paths" : {
+    "/api/saude" : {
+      "get" : {
+        "description" : "Verifica a API e a conexão com o banco de dados. Responde 200 quando tudo está disponível e 503 quando algum componente está indisponível. Não exige autenticação.",
+        "operationId" : "obterSaude",
+        "responses" : {
+          "200" : {
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/SaudeResponse"
+                }
+              }
+            },
+            "description" : "API e banco de dados disponíveis."
+          },
+          "500" : {
+            "content" : {
+              "application/problem+json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ProblemaResponse"
+                }
+              }
+            },
+            "description" : "Erro inesperado."
+          },
+          "503" : {
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/SaudeResponse"
+                }
+              }
+            },
+            "description" : "Algum componente (ex.: banco de dados) está indisponível."
+          }
+        },
+        "summary" : "Verifica a saúde da API",
+        "tags" : [ "saude" ]
+      }
+    }
+  },
+  "components" : {
+    "schemas" : {
+      "CodigoErro" : {
+        "type" : "string",
+        "description" : "Código estável do erro. Códigos genéricos (ERRO_REQUISICAO, ERRO_INTERNO) devem ser tratados exibindo o detail.",
+        "enum" : [ "ERRO_VALIDACAO", "REQUISICAO_MALFORMADA", "NAO_AUTENTICADO", "ACESSO_NEGADO", "NAO_ENCONTRADO", "METODO_NAO_PERMITIDO", "TIPO_DE_MIDIA_NAO_SUPORTADO", "CONFLITO", "ERRO_REQUISICAO", "ERRO_INTERNO" ]
+      },
+      "ErroDeCampo" : {
+        "type" : "object",
+        "description" : "Erro de validação de um campo.",
+        "properties" : {
+          "campo" : {
+            "type" : "string",
+            "description" : "Caminho do campo inválido (ex.: nome, itens[0].quantidade). \"requisicao\" para erros da requisição como um todo e \"parametros\" para restrições entre parâmetros."
+          },
+          "mensagem" : {
+            "type" : "string",
+            "description" : "Mensagem em pt-BR, segura para exibir ao usuário."
+          }
+        },
+        "required" : [ "campo", "mensagem" ]
+      },
+      "ProblemaResponse" : {
+        "type" : "object",
+        "description" : "Erro no formato Problem Details (RFC 9457), com as extensões do projeto (codigo, ocorridoEm, erros). Content-Type: application/problem+json.",
+        "properties" : {
+          "codigo" : {
+            "$ref" : "#/components/schemas/CodigoErro",
+            "description" : "Código estável do erro, para o cliente decidir o tratamento."
+          },
+          "detail" : {
+            "type" : "string",
+            "description" : "Mensagem em pt-BR, segura para exibir ao usuário."
+          },
+          "erros" : {
+            "type" : "array",
+            "description" : "Erros por campo, ordenados por campo e mensagem. Só com codigo ERRO_VALIDACAO.",
+            "items" : {
+              "$ref" : "#/components/schemas/ErroDeCampo"
+            }
+          },
+          "instance" : {
+            "type" : "string",
+            "format" : "uri-reference",
+            "description" : "Caminho da requisição (referência de URI relativa, ex.: /api/saude; omitido se não formar uma URI válida)."
+          },
+          "ocorridoEm" : {
+            "type" : "string",
+            "format" : "date-time",
+            "description" : "Momento do erro (UTC, precisão de milissegundos)."
+          },
+          "status" : {
+            "type" : "integer",
+            "format" : "int32",
+            "description" : "Código HTTP real da resposta."
+          },
+          "title" : {
+            "type" : "string",
+            "description" : "Título curto em pt-BR, fixo por codigo."
+          },
+          "type" : {
+            "type" : "string",
+            "format" : "uri-reference",
+            "description" : "Tipo do problema (referência de URI, RFC 9457). Sempre about:blank: a semântica fina vem de codigo."
+          }
+        },
+        "required" : [ "codigo", "detail", "ocorridoEm", "status", "title", "type" ]
+      },
+      "SaudeResponse" : {
+        "type" : "object",
+        "description" : "Resultado da verificação de saúde da API.",
+        "properties" : {
+          "bancoDeDados" : {
+            "$ref" : "#/components/schemas/StatusComponente",
+            "description" : "Status da conexão com o banco de dados (PostgreSQL)."
+          },
+          "status" : {
+            "$ref" : "#/components/schemas/StatusComponente",
+            "description" : "Status agregado: DISPONIVEL se e somente se todos os componentes estão DISPONIVEL."
+          },
+          "verificadoEm" : {
+            "type" : "string",
+            "format" : "date-time",
+            "description" : "Momento da verificação (UTC, precisão de milissegundos)."
+          }
+        },
+        "required" : [ "bancoDeDados", "status", "verificadoEm" ]
+      },
+      "StatusComponente" : {
+        "type" : "string",
+        "description" : "Status de um componente verificado: DISPONIVEL ou INDISPONIVEL.",
+        "enum" : [ "DISPONIVEL", "INDISPONIVEL" ]
+      }
+    }
+  }
+}

@@ -1,0 +1,16 @@
+target/
+.idea/
+*.iml
+.vscode/
+.classpath
+.project
+.settings/
+.factorypath
+bin/
+HELP.md
+Dockerfile
+.dockerignore
+*.log
+.env
+.env.*
+!.env.example

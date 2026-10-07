@@ -1,0 +1,52 @@
+spring:
+  application:
+    name: kontra-backend
+  autoconfigure:
+    # Sem mecanismo de autenticação no Marco 0 (ADR-007): desliga o usuário em memória que o Boot
+    # geraria (e o log "Using generated security password"). Por propriedade, para valer também nos
+    # testes de fatia (@WebMvcTest).
+    # ATENÇÃO: é uma LISTA. Qualquer outra fonte desta propriedade (variável SPRING_AUTOCONFIGURE_EXCLUDE,
+    # perfil, @SpringBootTest(properties = ...), linha de comando) SUBSTITUI esta lista em vez de somar —
+    # repita esta classe nela, senão o usuário em memória volta a ser criado.
+    exclude: org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration
+  datasource:
+    # Padrões apontam para o PostgreSQL do docker compose — credenciais SÓ de desenvolvimento (ADR-012).
+    # Qualquer ambiente real deve sobrescrever BANCO_URL, BANCO_USUARIO e BANCO_SENHA.
+    url: ${BANCO_URL:jdbc:postgresql://localhost:5432/kontra}
+    username: ${BANCO_USUARIO:kontra}
+    password: ${BANCO_SENHA:kontra}
+    hikari:
+      # Falha rápida quando o banco está fora (padrão do Hikari é 30 s).
+      connection-timeout: 5000
+  jpa:
+    open-in-view: false
+    hibernate:
+      # O esquema é 100% controlado pelo Flyway (db/migration).
+      ddl-auto: validate
+  web:
+    # Aplicação só em português (ADR-013): mensagens do Bean Validation sempre em pt-BR,
+    # independentemente do Accept-Language do cliente e do locale da JVM.
+    locale: pt_BR
+    locale-resolver: fixed
+    error:
+      # Erros fora do MVC respondem em Problem Details pelo ErroPadraoController (comum/erro); a página
+      # "Whitelabel" do Boot fica desligada. (No Boot 4, server.error.* foi substituído por spring.web.error.*.)
+      whitelabel:
+        enabled: false
+
+springdoc:
+  # Contrato OpenAPI determinístico (ADR-004): chaves ordenadas e JSON indentado, para o snapshot
+  # versionado em openapi/openapi.json (gerado pelo SnapshotOpenApiIT).
+  writer-with-order-by-keys: true
+  writer-with-default-pretty-printer: true
+  # Só a API (ADR-005) entra no contrato: /error e outras rotas técnicas ficam de fora.
+  paths-to-match: /api/**
+  # As respostas de erro de cada operação são só as declaradas nela (@ApiResponse); nada é injetado a partir
+  # do @RestControllerAdvice (ADR-004, item 6).
+  override-with-generic-response: false
+  # Ligados explicitamente (sem isso o springdoc avisa no log). Para desligar num ambiente, use as variáveis
+  # SPRINGDOC_API_DOCS_ENABLED=false e SPRINGDOC_SWAGGER_UI_ENABLED=false (têm precedência sobre este arquivo).
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true
