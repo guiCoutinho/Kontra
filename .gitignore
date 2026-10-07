@@ -1,0 +1,46 @@
+# Segredos / ambiente
+.env
+.env.*
+!.env.example
+
+# Backend
+backend/target/
+
+# Frontend / Node
+node_modules/
+frontend/dist/
+
+# Build e cobertura
+/frontend/coverage/
+/e2e/coverage/
+*.local
+
+# E2E (Playwright)
+e2e/playwright-report/
+e2e/test-results/
+e2e/blob-report/
+e2e/playwright/.cache/
+
+# Logs
+*.log
+
+# IDE
+.idea/
+*.iml
+**/.vscode/*
+!**/.vscode/extensions.json
+
+# SO
+.DS_Store
+Thumbs.db
+
+# Claude Code (local)
+.claude/settings.local.json
+
+# Backend — IDE/Initializr
+/backend/HELP.md
+/backend/.classpath
+/backend/.project
+/backend/.settings/
+/backend/.factorypath
+/backend/bin/
