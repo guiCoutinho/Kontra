@@ -9,7 +9,11 @@
     "lint": "oxlint --deny-warnings",
     "test": "vitest run",
     "test:watch": "vitest",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "generate:api": "orval"
+  },
+  "allowScripts": {
+    "esbuild": false
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
@@ -30,6 +34,7 @@
     "@types/react-dom": "^19.2.7",
     "@vitejs/plugin-react": "^6.1.2",
     "jsdom": "^30.0.0",
+    "orval": "8.40.0",
     "oxlint": "^1.87.0",
     "typescript": "~6.0.3",
     "vite": "^8.3.3",

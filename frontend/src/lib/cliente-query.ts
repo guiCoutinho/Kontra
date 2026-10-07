@@ -1,18 +1,11 @@
 import { QueryClient } from '@tanstack/react-query'
-
-function statusDoErro(erro: unknown): number | undefined {
-  if (typeof erro === 'object' && erro !== null && 'status' in erro) {
-    const { status } = erro
-    return typeof status === 'number' ? status : undefined
-  }
-  return undefined
-}
+import { ErroApi } from '@/lib/cliente-api'
 
 /** Tenta de novo (uma vez) apenas erro de rede ou 5xx; nunca erro 4xx. */
 export function deveTentarNovamente(tentativas: number, erro: unknown): boolean {
   if (tentativas >= 1) return false
-  const status = statusDoErro(erro)
-  return status === undefined || status >= 500
+  if (erro instanceof ErroApi) return erro.status >= 500
+  return erro instanceof TypeError
 }
 
 export function criarQueryClient(): QueryClient {

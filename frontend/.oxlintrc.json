@@ -9,5 +9,5 @@
     "react/jsx-key": "error",
     "react/only-export-components": ["warn", { "allowConstantExport": true }]
   },
-  "ignorePatterns": ["dist", "src/api/generated"]
+  "ignorePatterns": ["node_modules", "dist", "src/api/generated"]
 }

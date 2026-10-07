@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { ErroApi } from '@/lib/cliente-api'
 import { criarQueryClient, deveTentarNovamente } from '@/lib/cliente-query'
 
 async function contarChamadas(erro: unknown): Promise<number> {
@@ -19,8 +20,8 @@ describe('cliente-query', () => {
   })
 
   it('tenta de novo em erro 5xx, mas nunca em 4xx', () => {
-    expect(deveTentarNovamente(0, { status: 503 })).toBe(true)
-    expect(deveTentarNovamente(0, { status: 404 })).toBe(false)
+    expect(deveTentarNovamente(0, new ErroApi(503))).toBe(true)
+    expect(deveTentarNovamente(0, new ErroApi(404))).toBe(false)
   })
 
   it('usa os defaults da arquitetura', () => {
@@ -31,11 +32,15 @@ describe('cliente-query', () => {
   })
 
   it('chama a consulta 2 vezes quando o erro é 503', async () => {
-    expect(await contarChamadas({ status: 503 })).toBe(2)
+    expect(await contarChamadas(new ErroApi(503))).toBe(2)
   })
 
   it('chama a consulta 1 vez quando o erro é 404', async () => {
-    expect(await contarChamadas({ status: 404 })).toBe(1)
+    expect(await contarChamadas(new ErroApi(404))).toBe(1)
+  })
+
+  it('não tenta de novo um erro que não é de rede (ex.: SyntaxError)', async () => {
+    expect(await contarChamadas(new SyntaxError('JSON inválido'))).toBe(1)
   })
 
   it('chama a consulta 2 vezes quando o erro é de rede', async () => {
