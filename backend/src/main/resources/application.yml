@@ -33,3 +33,17 @@ spring:
       # "Whitelabel" do Boot fica desligada. (No Boot 4, server.error.* foi substituído por spring.web.error.*.)
       whitelabel:
         enabled: false
+
+springdoc:
+  # Contrato OpenAPI determinístico (ADR-004): chaves ordenadas e JSON indentado, para o snapshot
+  # versionado em openapi/openapi.json (gerado pelo SnapshotOpenApiIT).
+  writer-with-order-by-keys: true
+  writer-with-default-pretty-printer: true
+  # Só a API (ADR-005) entra no contrato: /error e outras rotas técnicas ficam de fora.
+  paths-to-match: /api/**
+  # Ligados explicitamente (sem isso o springdoc avisa no log). Para desligar num ambiente, use as variáveis
+  # SPRINGDOC_API_DOCS_ENABLED=false e SPRINGDOC_SWAGGER_UI_ENABLED=false (têm precedência sobre este arquivo).
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true

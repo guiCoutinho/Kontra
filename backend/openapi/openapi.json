@@ -1,0 +1,12 @@
+{
+  "openapi" : "3.1.0",
+  "info" : {
+    "title" : "API do Kontra",
+    "version" : "0.1.0"
+  },
+  "servers" : [ {
+    "url" : "/"
+  } ],
+  "paths" : { },
+  "components" : { }
+}
