@@ -70,6 +70,13 @@ public class TratadorGlobalDeExcecoes extends ResponseEntityExceptionHandler {
 	/** Valor de {@code campo} para restrições que envolvem vários parâmetros do método. */
 	static final String CAMPO_DOS_PARAMETROS = "parametros";
 
+	/**
+	 * Mensagem de falha de conversão no binding (ex.: texto num campo numérico). A mensagem padrão do Spring vem
+	 * da {@code PropertyAccessException}, em inglês e com nomes de classe Java ("Failed to convert property value
+	 * of type 'java.lang.String'..."), e não pode ir para o cliente.
+	 */
+	static final String MENSAGEM_DE_VALOR_INVALIDO = "valor inválido";
+
 	private final FabricaDeProblemas fabricaDeProblemas;
 
 	public TratadorGlobalDeExcecoes(FabricaDeProblemas fabricaDeProblemas) {
@@ -165,7 +172,8 @@ public class TratadorGlobalDeExcecoes extends ResponseEntityExceptionHandler {
 	private static List<ErroDeCampo> errosDe(Errors errosDeValidacao) {
 		List<ErroDeCampo> erros = new ArrayList<>();
 		errosDeValidacao.getFieldErrors()
-			.forEach(erro -> erros.add(new ErroDeCampo(erro.getField(), mensagemDe(erro))));
+			.forEach(erro -> erros.add(new ErroDeCampo(erro.getField(),
+					erro.isBindingFailure() ? MENSAGEM_DE_VALOR_INVALIDO : mensagemDe(erro))));
 		errosDeValidacao.getGlobalErrors()
 			.forEach(erro -> erros.add(new ErroDeCampo(CAMPO_DA_REQUISICAO, mensagemDe(erro))));
 		return erros;

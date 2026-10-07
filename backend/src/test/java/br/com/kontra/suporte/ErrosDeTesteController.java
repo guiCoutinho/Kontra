@@ -22,11 +22,13 @@ import jakarta.validation.constraintvalidation.ValidationTarget;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.Size;
 
 import org.springframework.boot.test.context.TestComponent;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -90,6 +92,10 @@ public class ErrosDeTesteController {
 	}
 
 	public record ItemDeTeste(@NotNull @Positive Integer quantidade) {
+	}
+
+	/** Parâmetros de consulta ligados a um objeto (@ModelAttribute), como um filtro de listagem. */
+	public record FiltroDeTesteRequest(@Positive Integer pagina, @NotBlank String nome) {
 	}
 
 	public record RequisicaoDeTeste(@NotBlank String nome, List<@Valid ItemDeTeste> itens) {
@@ -198,6 +204,22 @@ public class ErrosDeTesteController {
 		if (!violacoes.isEmpty()) {
 			throw new ConstraintViolationException(violacoes);
 		}
+	}
+
+	/** Binding de @ModelAttribute: tipo inválido gera falha de binding (sem validação de método). */
+	@GetMapping("/filtro")
+	FiltroDeTesteRequest receberFiltro(@Valid @ModelAttribute FiltroDeTesteRequest filtro) {
+		return filtro;
+	}
+
+	/**
+	 * O mesmo binding com validação de método ativa (restrição em outro parâmetro): as falhas chegam como
+	 * {@code HandlerMethodValidationException} com {@code ParameterErrors}.
+	 */
+	@GetMapping("/filtro-com-validacao-de-metodo")
+	FiltroDeTesteRequest receberFiltroComValidacaoDeMetodo(@Valid @ModelAttribute FiltroDeTesteRequest filtro,
+			@RequestParam(required = false) @Size(max = 3) String sigla) {
+		return filtro;
 	}
 
 	@GetMapping("/excecao-api")

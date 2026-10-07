@@ -18,6 +18,8 @@ import java.net.URI;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -142,6 +144,29 @@ class TratadorGlobalDeExcecoesTest {
 			.andExpectAll(problema(HttpStatus.NOT_ACCEPTABLE, CodigoErro.ERRO_REQUISICAO, CAMINHO_BASE + "/ok"),
 					jsonPath("$.title").value("Requisição não atendida"),
 					jsonPath("$.detail").value("O formato de resposta solicitado não está disponível para este recurso."));
+	}
+
+	@ParameterizedTest(name = "{0}")
+	@ValueSource(strings = { "/filtro", "/filtro-com-validacao-de-metodo" })
+	void deveUsarMensagemFixaEmPortuguesQuandoBindingDeModelAttributeFalharPorTipoInvalido(String rota) throws Exception {
+		this.mockMvc.perform(get(CAMINHO_BASE + rota).param("pagina", "abc").param("nome", "Kontra"))
+			.andExpectAll(problema(HttpStatus.BAD_REQUEST, CodigoErro.ERRO_VALIDACAO, CAMINHO_BASE + rota),
+					jsonPath("$.erros.length()").value(1), jsonPath("$.erros[0].campo").value("pagina"),
+					jsonPath("$.erros[0].mensagem").value("valor inválido"),
+					content().string(not(containsString("java."))),
+					content().string(not(containsStringIgnoringCase("Failed to convert"))),
+					content().string(not(containsStringIgnoringCase("typeMismatch"))));
+	}
+
+	@ParameterizedTest(name = "{0}")
+	@ValueSource(strings = { "/filtro", "/filtro-com-validacao-de-metodo" })
+	void deveManterMensagemDaRestricaoQuandoBindingFuncionarMasValidacaoFalhar(String rota) throws Exception {
+		this.mockMvc.perform(get(CAMINHO_BASE + rota).param("pagina", "0").param("nome", " "))
+			.andExpectAll(problema(HttpStatus.BAD_REQUEST, CodigoErro.ERRO_VALIDACAO, CAMINHO_BASE + rota),
+					jsonPath("$.erros.length()").value(2), jsonPath("$.erros[0].campo").value("nome"),
+					jsonPath("$.erros[0].mensagem").value("não deve estar em branco"),
+					jsonPath("$.erros[1].campo").value("pagina"),
+					jsonPath("$.erros[1].mensagem").value("deve ser maior que 0"));
 	}
 
 	@Test
