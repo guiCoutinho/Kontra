@@ -79,6 +79,7 @@ Regras:
 - Camadas: `controller` (HTTP, validação de entrada, mapeamento DTO) → `service` (regra de negócio, `@Transactional`) → `repository` (Spring Data). Controllers nunca acessam repositories.
 - `domain/` contém entidades JPA (nome em português, sem sufixo: `Contrato`); elas nunca saem do service — controllers recebem/devolvem só DTOs (`record`s em `dto/`, com sufixo `Request` para entrada e `Response` para saída).
 - Exceções de negócio estendem `comum.erro.ExcecaoApi` (carrega `HttpStatus` + `CodigoErro` + mensagem em pt-BR); só aceita status de erro (4xx/5xx) — outro status é rejeitado na construção. Nunca se lança `ResponseStatusException` diretamente.
+- **DTOs do contrato e Jackson**: o springdoc gera os schemas com o Jackson 2 do swagger-core, que **não** enxerga as anotações de databind do Jackson 3 (`tools.jackson.databind.annotation.*`, ex.: `@JsonSerialize`, `@JsonNaming`) nem a configuração `spring.jackson.*`. Nos DTOs do contrato, usar só `com.fasterxml.jackson.annotation.*` (compartilhadas pelos dois, ex.: `@JsonProperty`, `@JsonInclude`) e não configurar nada em `spring.jackson.*` que mude o formato do JSON (nomes, inclusão, datas). Um teste compara o JSON real com o schema publicado (T6 do Marco 0).
 - Configuração lida de `application.yml` com placeholders de variáveis de ambiente (`${BANCO_URL:...}`); nada de perfis por ambiente no Marco 0.
 - `spring.jpa.open-in-view=false`, `spring.jpa.hibernate.ddl-auto=validate`, Hikari `connection-timeout` de 5 s (falha rápida; a verificação de saúde responde em poucos segundos com o banco fora).
 - Testes: `*Test` = unitários/slice, sem Docker (Surefire, `./mvnw test`); `*IT` = integração com contexto completo + Testcontainers (Failsafe, `./mvnw verify`), sempre anotados com `@TesteDeIntegracao`. Métodos de teste em português, no formato `deve<Resultado>Quando<Condicao>()`. Ver ADR-011.
@@ -257,8 +258,9 @@ Schemas no OpenAPI: `ProblemaResponse`, `ErroDeCampo` e o enum `CodigoErro` (rec
 3. **Divergência no backend**: o teste compara o spec gerado com o arquivo como árvore JSON (imune a CRLF/LF). Diferente → falha com a mensagem "rode `./mvnw verify -Dopenapi.atualizarSnapshot=true`". Com a propriedade `openapi.atualizarSnapshot=true`, o teste regrava o arquivo e passa. Toda tarefa de backend que muda o contrato commita o snapshot atualizado junto.
 4. **Quem gera o cliente**: o frontend, com `npm run generate:api` (lê `../backend/openapi/openapi.json`, só leitura). `src/api/generated/` é versionado e excluído do lint.
 5. **Divergência no frontend**: o CI roda `npm run generate:api` e `git diff --exit-code -- src/api/generated`; diferença → falha.
+6. **Proteções adicionais**: `springdoc.override-with-generic-response: false` (as respostas de erro de cada operação são só as declaradas; nada é injetado a partir do `@RestControllerAdvice`); o `SnapshotOpenApiIT` recusa regravar o arquivo quando a variável de ambiente `CI` está definida; o CI roda `git diff --exit-code -- backend/openapi/openapi.json` depois do `./mvnw -B verify` (pega `-D` indevido no workflow ou snapshot não commitado); e um teste confere que as chaves do JSON real dos DTOs batem com `properties`/`required` do schema publicado — o springdoc usa Jackson 2 e a aplicação Jackson 3 (ver "Backend — pacotes", regra "DTOs do contrato e Jackson").
 
-**Consequências.** Mudança de contrato = commit de backend (código + snapshot) seguido de commit de frontend (cliente regenerado). O build Docker do frontend não precisa do backend nem do spec. O frontend nunca edita o snapshot nem o código gerado.
+**Consequências.** Mudança de contrato = commit de backend (código + snapshot) seguido de commit de frontend (cliente regenerado). O build Docker do frontend não precisa do backend nem do spec. O frontend nunca edita o snapshot nem o código gerado. Divergência entre o JSON real e o schema publicado quebra o build do backend.
 
 ### ADR-005 — Prefixo `/api` e mesma origem (sem CORS)
 
@@ -287,7 +289,7 @@ Schemas no OpenAPI: `ProblemaResponse`, `ErroDeCampo` e o enum `CodigoErro` (rec
 - sessão `STATELESS`; CSRF desabilitado (não há autenticação por cookie nem endpoint de escrita) — **o marco de autenticação deve reavaliar CSRF obrigatoriamente**;
 - sem CORS (ADR-005); cabeçalhos de segurança padrão do Spring Security mantidos.
 
-**Consequências.** Rotas novas nascem protegidas; qualquer rota pública nova exige alteração explícita da `SegurancaConfig` (revisada). Swagger público em todos os ambientes no Marco 0 (não existe produção); pode ser desligado por variável (`SPRINGDOC_API_DOCS_ENABLED=false`, `SPRINGDOC_SWAGGER_UI_ENABLED=false`).
+**Consequências.** Rotas novas nascem protegidas; qualquer rota pública nova exige alteração explícita da `SegurancaConfig` (revisada). Swagger público em todos os ambientes no Marco 0 (não existe produção); pode ser desligado por variável (`SPRINGDOC_API_DOCS_ENABLED=false`, `SPRINGDOC_SWAGGER_UI_ENABLED=false`). Com o Swagger UI público, `springdoc.swagger-ui.query-config-enabled` **deve permanecer `false`** (padrão): impede carregar spec/configuração externa via `?url=`/`?configUrl=`, vetor clássico de XSS do Swagger UI. `/v3/api-docs.yaml` responde 401 (fica fora do `permitAll` de `/v3/api-docs/**`) — aceitável; o contrato publicado é o JSON.
 
 **Pendências obrigatórias do marco de autenticação** (e itens da auditoria de segurança):
 - reavaliar CSRF conforme o mecanismo escolhido (obrigatório reabilitar se houver autenticação por cookie);

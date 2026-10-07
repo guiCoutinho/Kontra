@@ -175,14 +175,22 @@ Legenda: cada tarefa = 1 commit na branch `feat/marco-0-fundacao` (ADR-010). Flu
 - **Depende de**: T4.
 
 **T6 — Endpoint `GET /api/saude`** · `backend`
-- **Área**: `saude/controller/SaudeController.java`, `saude/service/SaudeService.java`, `saude/dto/SaudeResponse.java`, `saude/dto/StatusComponente.java`, testes, `backend/openapi/openapi.json` (atualizado).
+- **Área**: `saude/controller/SaudeController.java`, `saude/service/SaudeService.java`, `saude/dto/SaudeResponse.java`, `saude/dto/StatusComponente.java`, testes, `backend/openapi/openapi.json` (atualizado), `application.yml`, `config/SnapshotOpenApiIT.java` (ajuste), `backend/.mvn/jvm.config`.
 - **Fazer**: conforme o contrato acima. `SaudeController.obterSaude()` → `SaudeService.verificarBancoDeDados()`. Anotações: `@Tag(name = "saude")`, `@Operation(operationId = "obterSaude", ...)`, `@ApiResponse` para 200, 503 (`SaudeResponse`) e 500 (`ProblemaResponse`, `application/problem+json`); campos obrigatórios com `requiredMode = REQUIRED`; enums com `enumAsRef = true`.
   - Como os schemas de erro passam a aparecer no snapshot nesta tarefa, `ProblemaResponse`, `ErroDeCampo` e `CodigoErro` (`comum/erro`) recebem `@Schema`: `requiredMode = REQUIRED` em `type`, `title`, `status`, `detail`, `codigo`, `ocorridoEm` (`ProblemaResponse`) e em `campo`, `mensagem` (`ErroDeCampo`); `instance` e `erros` opcionais; `enumAsRef = true` em `CodigoErro`; descrições em português.
+  - `springdoc.override-with-generic-response: false` no `application.yml` (intenção explícita de não injetar as respostas do `@RestControllerAdvice` em todas as operações).
+  - Teste que confere que as chaves do JSON real de `SaudeResponse` e de `ProblemaResponse` batem com `properties`/`required` do schema publicado no snapshot (fecha a lacuna Jackson 2 do springdoc × Jackson 3 da aplicação — ver ARQUITETURA, "DTOs do contrato e Jackson").
+  - `SnapshotOpenApiIT` recusa a regravação (`-Dopenapi.atualizarSnapshot=true`) quando a variável de ambiente `CI` está definida, com mensagem clara.
+  - `backend/.mvn/jvm.config` com `-Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8` (acentos corretos no console do Maven no Windows).
 - **Pronto**:
   - `SaudeServiceTest` (Mockito): conexão válida → `DISPONIVEL`/`DISPONIVEL`; `SQLException` ou `isValid=false` → `INDISPONIVEL`/`INDISPONIVEL`.
   - `SaudeControllerTest` (`@WebMvcTest` + `SegurancaConfig`, service mockado): 200 com corpo `DISPONIVEL`; 503 com corpo `INDISPONIVEL`; sem autenticação; `Cache-Control: no-store`.
   - `SaudeIT` (`@TesteDeIntegracao`, Testcontainers): `GET /api/saude` → 200 e `{"status":"DISPONIVEL","bancoDeDados":"DISPONIVEL","verificadoEm":"..."}`.
   - Snapshot atualizado: `node -e "const s=require('./backend/openapi/openapi.json');console.log(s.paths['/api/saude'].get.operationId, Object.keys(s.components.schemas).sort().join(','))"` → `obterSaude CodigoErro,ErroDeCampo,ProblemaResponse,SaudeResponse,StatusComponente`; `SaudeResponse.required` contém `status`, `bancoDeDados`, `verificadoEm`; `ProblemaResponse.required` contém `type`, `title`, `status`, `detail`, `codigo`, `ocorridoEm`; `CodigoErro.enum` inclui `ERRO_REQUISICAO`.
+  - No snapshot, `/api/saude` tem só as respostas `200`, `503` e `500`: `node -e "const s=require('./backend/openapi/openapi.json');console.log(Object.keys(s.paths['/api/saude'].get.responses).sort().join(','))"` → `200,500,503`.
+  - O teste de aderência JSON real × schema passa; renomear um campo só no JSON (ex.: `@JsonProperty`) sem atualizar o snapshot faz o teste falhar.
+  - `CI=true ./mvnw verify -Dopenapi.atualizarSnapshot=true` → falha com a mensagem de recusa e o arquivo não é alterado.
+  - No Git Bash, a saída do `./mvnw verify` mostra acentos corretamente (ex.: nomes/mensagens de teste com "ç"/"ã" legíveis).
   - Manual: com `docker compose up -d banco --wait` e `./mvnw spring-boot:run`: `curl -i http://localhost:8080/api/saude` → 200; `docker compose stop banco` → em até 10 s responde 503 com `INDISPONIVEL`; `docker compose start banco` → volta a 200.
   - `./mvnw verify` → `BUILD SUCCESS`.
 - **Depende de**: T5.
@@ -259,7 +267,7 @@ Legenda: cada tarefa = 1 commit na branch `feat/marco-0-fundacao` (ADR-010). Flu
 **T13 — Workflow de CI: jobs de backend e frontend** · `devops`
 - **Área**: `.github/workflows/ci.yml`.
 - **Fazer**: gatilhos `push` (todas as branches) e `pull_request`; `permissions: contents: read`; `concurrency` por ref com `cancel-in-progress`.
-  - Job `backend` (`ubuntu-latest`, `working-directory: backend`): `actions/checkout@v7`; `actions/setup-java@v6` (Temurin 21, `cache: maven`); `./mvnw -B verify`; em falha, `actions/upload-artifact@v7` com `target/surefire-reports` e `target/failsafe-reports`.
+  - Job `backend` (`ubuntu-latest`, `working-directory: backend`): `actions/checkout@v7`; `actions/setup-java@v6` (Temurin 21, `cache: maven`); `./mvnw -B verify`; em seguida `git diff --exit-code -- openapi/openapi.json` (relativo a `backend/`; pega `-D` indevido no workflow ou snapshot não commitado); em falha, `actions/upload-artifact@v7` com `target/surefire-reports` e `target/failsafe-reports`.
   - Job `frontend` (`working-directory: frontend`): checkout; `actions/setup-node@v7` (Node 24, `cache: npm`, `cache-dependency-path: frontend/package-lock.json`); `npm ci`; `npm run lint`; `npm run test`; `npm run build`; `npm run generate:api` e `git diff --exit-code -- src/api/generated`.
 - **Pronto** (validação local — não há push até o usuário pedir):
   - `MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/repo" -w /repo rhysd/actionlint:latest` (Git Bash, na raiz) → sem erros.
@@ -316,7 +324,7 @@ Legenda: cada tarefa = 1 commit na branch `feat/marco-0-fundacao` (ADR-010). Flu
 | R8 | PostgreSQL 18 mudou o layout de dados da imagem (volume em `/var/lib/postgresql/data` não persiste corretamente). | Volume montado em `/var/lib/postgresql` (T2). |
 | R9 | Conflito de portas no Windows (PostgreSQL local na 5432, outros serviços na 8080/3000). | Portas do host configuráveis (`PORTA_POSTGRES`, `PORTA_BACKEND`, `PORTA_FRONTEND`). |
 | R10 | Credenciais padrão de desenvolvimento (`kontra`/`kontra`) versionadas em `application.yml`/compose; além disso, a aplicação conecta como **superusuário** (o `POSTGRES_USER` da imagem oficial é superuser). | Marcadas como só-dev (ADR-012); ambientes reais sobrescrevem por variável; portas publicadas só em `127.0.0.1`. Quando houver dados reais, criar um papel próprio da aplicação, sem superuser (dono só do esquema da aplicação). Itens da auditoria de segurança do fim do marco. |
-| R11 | Swagger/OpenAPI públicos. | Aceito no Marco 0 (sem produção); desligável por variável; reavaliar no marco de autenticação. |
+| R11 | Swagger/OpenAPI públicos (inclusive o vetor de XSS do Swagger UI ao carregar spec externo por `?url=`/`?configUrl=`). | Aceito no Marco 0 (sem produção); desligável por variável; `springdoc.swagger-ui.query-config-enabled` permanece `false` (padrão — ADR-007); `/v3/api-docs.yaml` responde 401 (fora do `permitAll`, aceitável); reavaliar no marco de autenticação. |
 | R12 | A verificação de saúde (`/api/saude`) trava com o banco fora (timeout padrão do Hikari é 30 s). | `connection-timeout` 5 s + `isValid(2)`; critério manual de 503 em até 10 s (T6). |
 | R13 | Agentes em paralelo na mesma árvore de trabalho misturam alterações no commit. | Propriedade por pasta (backend/frontend/devops/qa); devops adiciona arquivos por caminho explícito e confere `git diff --staged`. |
 | R14 | Job e2e lento no CI (build das imagens + download do Maven/npm). | Aceito no Marco 0; cache de camadas Docker (buildx/GHA) fica para depois. |
