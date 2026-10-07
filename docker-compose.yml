@@ -1,0 +1,26 @@
+# Ambiente do Kontra. Por enquanto só o banco; backend e frontend entram na T11.
+# Lê o .env da raiz (fora do git); sem ele, usa os padrões de desenvolvimento.
+name: kontra
+
+services:
+  banco:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-kontra}
+      POSTGRES_USER: ${POSTGRES_USER:-kontra}
+      # Senha padrão só para desenvolvimento; sobrescreva em qualquer ambiente real.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kontra}
+    ports:
+      - "127.0.0.1:${PORTA_POSTGRES:-5432}:5432"
+    volumes:
+      # PostgreSQL 18+ usa /var/lib/postgresql (o dado fica em um subdiretório por versão).
+      - kontra-dados-banco:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  kontra-dados-banco:
