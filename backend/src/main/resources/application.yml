@@ -1,0 +1,17 @@
+spring:
+  application:
+    name: kontra-backend
+  datasource:
+    # Padrões apontam para o PostgreSQL do docker compose — credenciais SÓ de desenvolvimento (ADR-012).
+    # Qualquer ambiente real deve sobrescrever BANCO_URL, BANCO_USUARIO e BANCO_SENHA.
+    url: ${BANCO_URL:jdbc:postgresql://localhost:5432/kontra}
+    username: ${BANCO_USUARIO:kontra}
+    password: ${BANCO_SENHA:kontra}
+    hikari:
+      # Falha rápida quando o banco está fora (padrão do Hikari é 30 s).
+      connection-timeout: 5000
+  jpa:
+    open-in-view: false
+    hibernate:
+      # O esquema é 100% controlado pelo Flyway (db/migration).
+      ddl-auto: validate
