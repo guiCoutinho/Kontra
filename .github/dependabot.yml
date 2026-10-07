@@ -1,0 +1,120 @@
+# Atualizações automáticas de dependências (Dependabot). Só abre PRs; nada é mesclado sozinho.
+# Semanal (segunda, 06:00 em São Paulo), com limite de PRs abertos por ecossistema e patches
+# agrupados para não inundar de PRs. Os PRs saem com o prefixo de commit do projeto.
+# As entradas "ignore" valem só para atualizações de versão (os alertas de segurança continuam).
+version: 2
+
+updates:
+  - package-ecosystem: maven
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/Sao_Paulo
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      patches-maven:
+        update-types: [patch]
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/Sao_Paulo
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    # Cada dependência cai no primeiro grupo que a casa; por isso o orval vem primeiro.
+    groups:
+      # Qualquer bump do orval muda o cliente gerado: o PR precisa de "npm run generate:api" (o CI
+      # falha no git diff de src/api/generated até alguém regenerar e commitar).
+      orval:
+        patterns: ["orval", "@orval/*"]
+      ferramentas:
+        dependency-type: development
+        update-types: [minor, patch]
+      patches-npm-frontend:
+        update-types: [patch]
+    ignore:
+      # ADR-001: TypeScript fica na 6.x (o 7 quebra os peers) e os tipos do Node acompanham o Node 24.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: npm
+    directory: /e2e
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/Sao_Paulo
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      patches-npm-e2e:
+        update-types: [patch]
+    ignore:
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: docker
+    directories:
+      - /backend
+      - /frontend
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/Sao_Paulo
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore(deps)"
+    ignore:
+      # Troca de LTS do Java é decisão do ADR-001.
+      - dependency-name: eclipse-temurin
+        update-types: ["version-update:semver-major"]
+      # Node 24 é a LTS do plano; versões ímpares não são LTS.
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
+      # 1.30 é a linha stable do nginx; o 1.31 seria mainline.
+      - dependency-name: nginxinc/nginx-unprivileged
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+
+  # Imagens do docker-compose.yml (ex.: postgres).
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/Sao_Paulo
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore(deps)"
+    ignore:
+      # Trocar a major do PostgreSQL exige dump/restore do volume de dados: decisão manual.
+      - dependency-name: postgres
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/Sao_Paulo
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore(ci)"
+    groups:
+      actions:
+        update-types: [minor, patch]
