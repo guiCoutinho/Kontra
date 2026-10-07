@@ -19,5 +19,7 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     setupFiles: ['src/test/configuracao.ts'],
+    // Fuso fixo: os testes de data não dependem da máquina.
+    env: { TZ: 'America/Sao_Paulo' },
   },
 })

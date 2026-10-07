@@ -1,6 +1,6 @@
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { montarRotas } from '@/app/roteador'
 import { renderizarAplicacaoEmRota } from '@/test/renderizar'
 
@@ -9,6 +9,15 @@ function PaginaQuebrada(): never {
 }
 
 describe('roteador', () => {
+  beforeEach(() => {
+    // A página inicial consulta /api/saude; aqui a resposta nunca chega (só importa a navegação).
+    vi.spyOn(globalThis, 'fetch').mockImplementation(() => new Promise(() => undefined))
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
   it('mostra o título Kontra e o heading "Status do sistema" em /', () => {
     renderizarAplicacaoEmRota('/')
 
